@@ -5,13 +5,18 @@ const path = require('path');
 
 require('./src/functions/rfbaTrigger.cjs');
 
-async function runCli(context, teamId = null, chain = false, requestUrl) {
+async function runCli(context, teamId = null, chain = false, requestUrl, seasonPart = null) {
   context.log(`Starting CLI sync... teamId = ${teamId || 'ALL'}, chain = ${chain}`);
   context.log(`ENV SELECTED_SEASON_PART (before spawn) = ${process.env.SELECTED_SEASON_PART ?? '(not set)'}`);
 
   const cliPath = path.join(__dirname, 'cli.js');
 
   const args = [cliPath];
+  // Pass season part to the CLI explicitly so it won't default to deel1.
+  if (seasonPart) {
+    args.push(`--part=${seasonPart}`);
+  }
+
   if (teamId) {
     args.push(`--teamId=${teamId}`);
   }
@@ -102,7 +107,17 @@ app.http('rfbasync', {
     const url = new URL(request.url);
     const teamId = url.searchParams.get('teamId');
     const chain = url.searchParams.get('chain') === 'true';
-    const part = url.searchParams.get('part');
+    const queryPartRaw = (url.searchParams.get('part') || '').trim().toLowerCase();
+    const envPartRaw = (process.env.SELECTED_SEASON_PART || '').trim().toLowerCase();
+
+    // Priority: query override > env var > default
+    let seasonPart = queryPartRaw || envPartRaw || 'deel1';
+    if (!['deel1', 'deel2'].includes(seasonPart)) {
+      context.log.warn(
+        `Invalid season part "${seasonPart}". Falling back to "deel1". (query="${queryPartRaw}", env="${envPartRaw}")`
+      );
+      seasonPart = 'deel1';
+    }
 
     context.log(
       `HTTP request received. teamId = ${teamId || 'none'}, chain = ${chain}`
@@ -110,8 +125,9 @@ app.http('rfbasync', {
 
     // Debug: confirm runtime env + incoming override (if any)
     context.log(`ENV SELECTED_SEASON_PART = ${process.env.SELECTED_SEASON_PART ?? '(not set)'}`);
-    context.log(`Request part param = ${part ?? '(none)'}`);
+    context.log(`Request part param = ${queryPartRaw || '(none)'}`);
+    context.log(`Resolved seasonPart = ${seasonPart}`);
 
-    return runCli(context, teamId, chain, request.url);
+    return runCli(context, teamId, chain, request.url, seasonPart);
   },
 });
