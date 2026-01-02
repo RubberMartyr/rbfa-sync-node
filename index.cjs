@@ -7,6 +7,7 @@ require('./src/functions/rfbaTrigger.cjs');
 
 async function runCli(context, teamId = null, chain = false, requestUrl) {
   context.log(`Starting CLI sync... teamId = ${teamId || 'ALL'}, chain = ${chain}`);
+  context.log(`ENV SELECTED_SEASON_PART (before spawn) = ${process.env.SELECTED_SEASON_PART ?? '(not set)'}`);
 
   const cliPath = path.join(__dirname, 'cli.js');
 
@@ -101,10 +102,15 @@ app.http('rfbasync', {
     const url = new URL(request.url);
     const teamId = url.searchParams.get('teamId');
     const chain = url.searchParams.get('chain') === 'true';
+    const part = url.searchParams.get('part');
 
     context.log(
       `HTTP request received. teamId = ${teamId || 'none'}, chain = ${chain}`
     );
+
+    // Debug: confirm runtime env + incoming override (if any)
+    context.log(`ENV SELECTED_SEASON_PART = ${process.env.SELECTED_SEASON_PART ?? '(not set)'}`);
+    context.log(`Request part param = ${part ?? '(none)'}`);
 
     return runCli(context, teamId, chain, request.url);
   },
