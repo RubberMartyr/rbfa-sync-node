@@ -1,0 +1,12 @@
+{
+  "name": "rbfa-sync",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.cjs",
+  "scripts": {
+    "start": "node cli.js"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.0.0"
+  }
+}
