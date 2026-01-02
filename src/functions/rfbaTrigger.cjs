@@ -7,6 +7,7 @@ const { app } = require('@azure/functions');
 app.timer('rfbaTrigger', {
     schedule: '0 0 6 * * 1', // Every Monday 06:00 UTC
     handler: async (myTimer, context) => {
+        console.log("🚀 Function deployed at", new Date().toISOString());
         context.log('RBFA Timer executed:', new Date().toISOString());
 
         const url = 'https://rfbasync.azurewebsites.net/api/rfbasync?chain=true';
