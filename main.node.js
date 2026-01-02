@@ -606,9 +606,24 @@ export async function runAllTeams(
   options = {}
 ) {
   try {
+    log("=== runAllTeams START ===", "log");
+    log(`selectedSeasonName = ${selectedSeasonName}`, "log");
+    log(`selectedSeasonId   = ${selectedSeasonId}`, "log");
+    log(`selectedSeasonPart = ${selectedSeasonPart}`, "log");
+    log(`teamIdFilter       = ${teamIdFilter ?? "(none)"}`, "log");
+    log(`chain              = ${options?.chain ?? false}`, "log");
+
     const chain = options.chain === true;
 
     const teams = await fetchClubTeams();
+    log(`fetchClubTeams() returned ${teams?.length ?? 0} teams`, "log");
+
+    if (Array.isArray(teams) && teams.length > 0) {
+      log(
+        `First 5 team IDs: ${teams.slice(0, 5).map(t => `${t.id}:${t.name}`).join(", ")}`,
+        "log"
+      );
+    }
 
     if (!teams || teams.length === 0) {
       log("No teams found!", "warn");
@@ -619,6 +634,23 @@ export async function runAllTeams(
     const filteredTeams = teams.filter(
       (team) => team.name && team.name.startsWith("U")
     );
+    log(`filteredTeams (U*) count = ${filteredTeams.length}`, "log");
+
+    if (teamIdFilter) {
+      log(
+        `teamIdFilter ${teamIdFilter} in ALL teams: ${
+          teams.some(t => String(t.id) === String(teamIdFilter))
+        }`,
+        "log"
+      );
+
+      log(
+        `teamIdFilter ${teamIdFilter} in FILTERED teams: ${
+          filteredTeams.some(t => String(t.id) === String(teamIdFilter))
+        }`,
+        "log"
+      );
+    }
 
     if (!filteredTeams.length) {
       log("No filtered teams found!", "warn");
@@ -711,11 +743,18 @@ export async function runAllTeams(
     // 👉 GEEN chain: normale run
     for (const team of filteredTeams) {
       if (teamIdFilter && String(team.id) !== String(teamIdFilter)) {
+        log(
+          `Skipping team ${team.id} (${team.name}) — does not match teamIdFilter`,
+          "log"
+        );
         continue;
       }
+
+      log(`➡️ ENTERING processTeam for ${team.id} (${team.name})`, "log");
       await processTeam(team);
     }
 
+    log("=== runAllTeams END ===", "log");
     log("🏁 All teams processed.", "log");
     console.log("NEXT_TEAM_ID:NONE");
   } catch (err) {
@@ -723,4 +762,3 @@ export async function runAllTeams(
     throw err;
   }
 }
-
