@@ -1,5 +1,5 @@
 import { fetchClubGrounds, fetchClubTeams, fetchTeamSeriesAndRankings, fetchTeamDetailsRBFA, fetchTeamsInSeriesRBFA, fetchTeamCalendarRBFA,fetchTeamsMembersRBFA } from './graphql.node.js';
-import { createVenue, updateVenue, doesUserExist, createUser, getChildVenues, doesEntityExist, createLeagueEntry, updateLeagueEntry, createTeamRecord, createListRecord, updateListRecord, updateTeamRecord, generateSlug, createEvent, updateEvent, uploadImageIfNotExists, createPlayer, updatePlayer, createStaff, updateStaff, createCalendar,updateCalendar, findMediaByExactSlug, toSlug } from './api.node.js';
+import { apiDomain, credentials, createVenue, updateVenue, doesUserExist, createUser, getChildVenues, doesEntityExist, createLeagueEntry, updateLeagueEntry, createTeamRecord, createListRecord, updateListRecord, updateTeamRecord, generateSlug, createEvent, updateEvent, uploadImageIfNotExists, createPlayer, createStaff, updateStaff, createCalendar,updateCalendar, findMediaByExactSlug, toSlug } from './api.node.js';
 import { log } from './logger.js';
 import { convertClubGroundToApiFormat , convertMatchToEvent, convertTeamDataToApiFormat, convertStaffDataToApiFormat, convertPlayerDataToApiFormat, convertTeamToListFormat } from './dataConverter.node.js';
 
@@ -9,6 +9,28 @@ export async function downloadImage(imageSrc) {
   const image = await fetch(imageSrc)
   const imageBlog = await image.blob()
   const imageURL = URL.createObjectURL(imageBlog)
+}
+
+// Update Player
+export async function updatePlayer(playerId, updatedData) {
+    const apiUrl = `${apiDomain}/wp-json/sportspress/v2/players/${playerId}`;
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + credentials,
+            },
+            body: JSON.stringify(updatedData),
+        });
+
+        if (!response.ok) throw new Error(`Error updating player: ${response.statusText}`);
+        const result = await response.json();
+        log('Player updated:', 'log', result);
+        return result;
+    } catch (error) {
+        log('Error updating player: ' + error, 'error');
+    }
 }
 
 export async function createRecordIfNotExist(team, originalTeamId = '', serieSlug = '') {
@@ -611,9 +633,24 @@ export async function runAllTeams(
   options = {}
 ) {
   try {
+    log("=== runAllTeams START ===", "log");
+    log(`selectedSeasonName = ${selectedSeasonName}`, "log");
+    log(`selectedSeasonId   = ${selectedSeasonId}`, "log");
+    log(`selectedSeasonPart = ${selectedSeasonPart}`, "log");
+    log(`teamIdFilter       = ${teamIdFilter ?? "(none)"}`, "log");
+    log(`chain              = ${options?.chain ?? false}`, "log");
+
     const chain = options.chain === true;
 
     const teams = await fetchClubTeams();
+    log(`fetchClubTeams() returned ${teams?.length ?? 0} teams`, "log");
+
+    if (Array.isArray(teams) && teams.length > 0) {
+      log(
+        `First 5 team IDs: ${teams.slice(0, 5).map(t => `${t.id}:${t.name}`).join(", ")}`,
+        "log"
+      );
+    }
 
     if (!teams || teams.length === 0) {
       log("No teams found!", "warn");
@@ -624,6 +661,23 @@ export async function runAllTeams(
     const filteredTeams = teams.filter(
       (team) => team.name && team.name.startsWith("U")
     );
+    log(`filteredTeams (U*) count = ${filteredTeams.length}`, "log");
+
+    if (teamIdFilter) {
+      log(
+        `teamIdFilter ${teamIdFilter} in ALL teams: ${
+          teams.some(t => String(t.id) === String(teamIdFilter))
+        }`,
+        "log"
+      );
+
+      log(
+        `teamIdFilter ${teamIdFilter} in FILTERED teams: ${
+          filteredTeams.some(t => String(t.id) === String(teamIdFilter))
+        }`,
+        "log"
+      );
+    }
 
     if (!filteredTeams.length) {
       log("No filtered teams found!", "warn");
@@ -716,11 +770,18 @@ export async function runAllTeams(
     // 👉 GEEN chain: normale run
     for (const team of filteredTeams) {
       if (teamIdFilter && String(team.id) !== String(teamIdFilter)) {
+        log(
+          `Skipping team ${team.id} (${team.name}) — does not match teamIdFilter`,
+          "log"
+        );
         continue;
       }
+
+      log(`➡️ ENTERING processTeam for ${team.id} (${team.name})`, "log");
       await processTeam(team);
     }
 
+    log("=== runAllTeams END ===", "log");
     log("🏁 All teams processed.", "log");
     console.log("NEXT_TEAM_ID:NONE");
   } catch (err) {
@@ -728,4 +789,3 @@ export async function runAllTeams(
     throw err;
   }
 }
-

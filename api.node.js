@@ -1,10 +1,10 @@
 import { convertTeamDataToApiFormat, convertLeagueDataToApiFormat } from './dataConverter.node.js';
 import { log } from './logger.js';
 
-const apiDomain = 'https://goldbug.be'; // Ensure this is your actual API endpoint
+export const apiDomain = 'https://goldbug.be'; // Ensure this is your actual API endpoint
 const username = 'ive';
 const password = 'x5qd TH4O FngR XBHk yMLI V8tn';
-const credentials = Buffer.from(username + ':' + password).toString('base64'); // Node.js Base64
+export const credentials = Buffer.from(username + ':' + password).toString('base64'); // Node.js Base64
 
 // api.node.js
 //import fetch from 'node-fetch'; // of global fetch als je die al hebt
@@ -456,6 +456,7 @@ export async function createListRecord(event) {
     }
 }
 
+// Update List
 export async function updateListRecord(listId, updatedData) {
     const apiUrl = `${apiDomain}/wp-json/sportspress/v2/lists/${listId}`;
     try {
@@ -468,12 +469,12 @@ export async function updateListRecord(listId, updatedData) {
             body: JSON.stringify(updatedData),
         });
 
-        if (!response.ok) throw new Error(`Error updating event: ${response.statusText}`);
+        if (!response.ok) throw new Error(`Error updating list: ${response.statusText}`);
         const result = await response.json();
-        log('Event updated:', 'log', result);
+        log('List updated:', 'log', result);
         return result;
     } catch (error) {
-        log('Error updating event: ' + error, 'error');
+        log('Error updating list: ' + error, 'error');
     }
 }
 
@@ -718,7 +719,6 @@ export async function doesUserExist(username) {
     return null;
   }
 }
-
 
 
 
