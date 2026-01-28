@@ -514,7 +514,7 @@ export function convertPlayerDataToApiFormat(playerData, playerSlug, serieId) {
         "parent": 0,  // Default to 0 for no parent
         "menu_order": 0,  // Default to 0 for no specific order
         "template": "",  // No template by default
-        "leagues": [serieId],  // Empty array for leagues (can be populated based on requirements)
+        "leagues": [],  // Empty array for leagues (can be populated based on requirements)
         "number": matches,
         "seasons": [],  // Empty array for seasons
         //"positions": [playerData.positionId],  // Assuming you have position ID (update as necessary)
