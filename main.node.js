@@ -1,5 +1,5 @@
 import { fetchClubGrounds, fetchClubTeams, fetchTeamSeriesAndRankings, fetchTeamDetailsRBFA, fetchTeamsInSeriesRBFA, fetchTeamCalendarRBFA,fetchTeamsMembersRBFA } from './graphql.node.js';
-import { createVenue, updateVenue, doesUserExist, createUser, getChildVenues, doesEntityExist, createLeagueEntry, updateLeagueEntry, createTeamRecord, createListRecord, updateTeamRecord, generateSlug, createEvent, updateEvent, uploadImageIfNotExists, createPlayer, updatePlayer, createStaff, updateStaff, createCalendar,updateCalendar, findMediaByExactSlug, toSlug } from './api.node.js';
+import { apiDomain, credentials, createVenue, updateVenue, doesUserExist, createUser, getChildVenues, doesEntityExist, createLeagueEntry, updateLeagueEntry, createTeamRecord, createListRecord, updateListRecord, updateTeamRecord, generateSlug, createEvent, updateEvent, uploadImageIfNotExists, createPlayer, createStaff, updateStaff, createCalendar,updateCalendar, findMediaByExactSlug, toSlug } from './api.node.js';
 import { log } from './logger.js';
 import { convertClubGroundToApiFormat , convertMatchToEvent, convertTeamDataToApiFormat, convertStaffDataToApiFormat, convertPlayerDataToApiFormat, convertTeamToListFormat } from './dataConverter.node.js';
 
@@ -9,6 +9,28 @@ export async function downloadImage(imageSrc) {
   const image = await fetch(imageSrc)
   const imageBlog = await image.blob()
   const imageURL = URL.createObjectURL(imageBlog)
+}
+
+// Update Player
+export async function updatePlayer(playerId, updatedData) {
+    const apiUrl = `${apiDomain}/wp-json/sportspress/v2/players/${playerId}`;
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + credentials,
+            },
+            body: JSON.stringify(updatedData),
+        });
+
+        if (!response.ok) throw new Error(`Error updating player: ${response.statusText}`);
+        const result = await response.json();
+        log('Player updated:', 'log', result);
+        return result;
+    } catch (error) {
+        log('Error updating player: ' + error, 'error');
+    }
 }
 
 export async function createRecordIfNotExist(team, originalTeamId = '', serieSlug = '') {
@@ -71,6 +93,11 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
         const listData = convertTeamToListFormat(team, listSlug, serieId, wpTeamId);
         listExists = await createListRecord(listData);
         console.log(`List Record exists for team: ${team.name}`);
+      }
+      else {
+        const listData = convertTeamToListFormat(team, listSlug, serieId, wpTeamId);
+        listExists = await updateListRecord(listExists.id, listData);
+        console.log(`List record UPDATED for team: ${team.name}`);
       }
       listId = listExists.id;
     }
