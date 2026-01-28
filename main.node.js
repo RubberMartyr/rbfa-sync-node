@@ -1,5 +1,5 @@
 import { fetchClubGrounds, fetchClubTeams, fetchTeamSeriesAndRankings, fetchTeamDetailsRBFA, fetchTeamsInSeriesRBFA, fetchTeamCalendarRBFA,fetchTeamsMembersRBFA } from './graphql.node.js';
-import { createVenue, updateVenue, doesUserExist, createUser, getChildVenues, doesEntityExist, createLeagueEntry, updateLeagueEntry, createTeamRecord, createListRecord, updateTeamRecord, generateSlug, createEvent, updateEvent, uploadImageIfNotExists, createPlayer, updatePlayer, createStaff, updateStaff, createCalendar,updateCalendar, findMediaByExactSlug, toSlug } from './api.node.js';
+import { createVenue, updateVenue, doesUserExist, createUser, getChildVenues, doesEntityExist, createLeagueEntry, updateLeagueEntry, createTeamRecord, createListRecord, updateListRecord, updateTeamRecord, generateSlug, createEvent, updateEvent, uploadImageIfNotExists, createPlayer, updatePlayer, createStaff, updateStaff, createCalendar,updateCalendar, findMediaByExactSlug, toSlug } from './api.node.js';
 import { log } from './logger.js';
 import { convertClubGroundToApiFormat , convertMatchToEvent, convertTeamDataToApiFormat, convertStaffDataToApiFormat, convertPlayerDataToApiFormat, convertTeamToListFormat } from './dataConverter.node.js';
 
@@ -71,6 +71,11 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
         const listData = convertTeamToListFormat(team, listSlug, serieId, wpTeamId);
         listExists = await createListRecord(listData);
         console.log(`List Record exists for team: ${team.name}`);
+      }
+      else {
+        const listData = convertTeamToListFormat(team, listSlug, serieId, wpTeamId);
+        listExists = await updateListRecord(listExists.id, listData);
+        console.log(`List record UPDATED for team: ${team.name}`);
       }
       listId = listExists.id;
     }

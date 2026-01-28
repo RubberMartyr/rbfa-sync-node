@@ -456,6 +456,27 @@ export async function createListRecord(event) {
     }
 }
 
+export async function updateListRecord(listId, updatedData) {
+    const apiUrl = `${apiDomain}/wp-json/sportspress/v2/lists/${listId}`;
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Basic ' + credentials,
+            },
+            body: JSON.stringify(updatedData),
+        });
+
+        if (!response.ok) throw new Error(`Error updating event: ${response.statusText}`);
+        const result = await response.json();
+        log('Event updated:', 'log', result);
+        return result;
+    } catch (error) {
+        log('Error updating event: ' + error, 'error');
+    }
+}
+
 
 // Create Event
 export async function createEvent(event) {
