@@ -532,11 +532,13 @@ export async function fetchTeamMembers(team, serieId) {
         if (existingPlayer) {
          // Update existing player
           await addPlayerOrStaffToTeamIfNotPresent(playerData, teamData.id, existingPlayer);
+          await addLeagueToPlayerIfNotPresent(playerData, serieId, existingPlayer);
           await updatePlayer(existingPlayer.id, playerData);
           log(`Updated player: ${player.firstName}  ${player.lastName}`, 'log');
         } else {
           // Create new player
           await addPlayerOrStaffToTeamIfNotPresent(playerData, teamData.id);
+          await addLeagueToPlayerIfNotPresent(playerData, serieId);
           await createPlayer(playerData);
           log(`Created player: ${player.firstName}  ${player.lastName}`, 'log');
         }
@@ -622,6 +624,20 @@ async function addPlayerOrStaffToTeamIfNotPresent(payload, teamId, existingRecor
     console.error(`Error associating Player/Staff with Team: ${error.message}`);
     return false;
   }
+}
+
+async function addLeagueToPlayerIfNotPresent(payload, serieId, existingRecord = null) {
+  if (!serieId) return;
+
+  if (!Array.isArray(payload.leagues)) payload.leagues = [];
+
+  const existingLeagues = Array.isArray(existingRecord?.leagues)
+    ? existingRecord.leagues
+    : [];
+
+  payload.leagues = Array.from(
+    new Set([...existingLeagues, ...payload.leagues, serieId])
+  );
 }
 
 
