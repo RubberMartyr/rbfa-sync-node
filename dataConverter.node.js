@@ -87,7 +87,7 @@ export function convertTeamDataToApiFormat(teamData, serieId, teamSlug, playerLi
         ],
         "staff": [],  // Empty staff array
         "tables": [],  // Empty tables array
-        "lists": [ playerListId ],  // Empty lists array
+        "lists": playerListId ? [playerListId] : [],  // Never send an undefined list ID
         "events": [],  // Empty events array
         "abbreviation": "",  // Empty abbreviation field
         "url": "",  // Empty URL
@@ -169,7 +169,7 @@ export function convertTeamToListFormat(teamData, listSlug, serieId, wpTeamId) {
         "menu_order": 0,  // Default to 0 for no specific order
         "template": "",  // No template by default
         "format": "list",  // Format is 'list'
-        "leagues": [ serieId ],  // Empty array for leagues
+        "leagues": serieId ? [serieId] : [],  // Never send a null league ID
         "seasons": [],  // Empty array for seasons
         "positions": [],  // Empty array for positions
         "class_list": [
