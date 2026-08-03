@@ -272,10 +272,35 @@ export async function fetchTeamsInSeries(series) {
   }
 }
 
+export function isFriendlySeriesId(seriesId) {
+  return typeof seriesId === 'string' && seriesId.startsWith('FRN_');
+}
+
+async function ensureFriendlyTeamRecord(matchTeam, selectedTeam, serieSlug) {
+  const lookupId = matchTeam.id === selectedTeam.id
+    ? matchTeam.id
+    : matchTeam.clubId;
+  const teamSlug = generateSlug(lookupId);
+
+  if (!teamSlug) return null;
+
+  let teamRecord = await doesEntityExist('teams', teamSlug);
+  if (teamRecord) return teamRecord;
+
+  log(`Creating missing friendly opponent ${matchTeam.name}.`, 'log');
+  const created = await createRecordIfNotExist(
+    matchTeam,
+    selectedTeam.id,
+    serieSlug
+  );
+  if (!created) return null;
+
+  teamRecord = await doesEntityExist('teams', teamSlug);
+  return teamRecord || null;
+}
+
 
 export async function fetchAndProcessTeamCalendar(team, selectedSeasonName, selectedSeasonId) {
-
-  let serieId = null;
   // Step 1: Ensure team object has the necessary data
   if (!team || !team.id || !team.name) {
       log('Invalid team object passed. Missing required properties.', 'error');
@@ -290,26 +315,56 @@ export async function fetchAndProcessTeamCalendar(team, selectedSeasonName, sele
       return;
   }
 
-  const eventPromises = [];
-  const eventsToAddToCalendar = [];
+  const eventIds = new Set();
+  const calendarLeagueIds = new Set();
 
   // Step 3: Process each match in the team calendar data
   for (const match of teamCalendarData) {
-
-    const serieSlug = generateSlug(match.series.id);
-
-    if (serieSlug !== '') {
-    let leagueExists = await doesEntityExist('leagues', serieSlug);
-    const leagueDescription = leagueExists?.description?.trim();
-
-    if (leagueExists && leagueDescription === selectedSeasonName) {
-      serieId = leagueExists.id;
-      match.series.serieId = leagueExists.id;
-    } else {
-      log(`Skipping match: League "${serieSlug}" does not match selected season "${selectedSeasonName}".`, 'log');
-      continue; // ⛔ Skip this match!
+    const rbfaSeriesId = match?.series?.id;
+    if (!rbfaSeriesId) {
+      log(`Skipping match ${match?.id} for team ${team.id} because series information is missing.`, 'warn');
+      continue;
     }
-  }
+
+    const friendlyMatch = isFriendlySeriesId(rbfaSeriesId);
+    const serieSlug = generateSlug(rbfaSeriesId);
+    let wpLeague = await doesEntityExist('leagues', serieSlug);
+
+    if (friendlyMatch) {
+      log(`Processing friendly match ${match.id} in series ${rbfaSeriesId}.`, 'log');
+      if (wpLeague) {
+        const leagueDescription = wpLeague.description?.trim();
+        if (leagueDescription && leagueDescription !== selectedSeasonName) {
+          log(`Skipping match ${match.id} for team ${team.id}: friendly series ${rbfaSeriesId} belongs to season "${leagueDescription}", not "${selectedSeasonName}".`, 'warn');
+          continue;
+        }
+        if (!leagueDescription) {
+          wpLeague = await updateLeagueEntry(wpLeague.id, { description: selectedSeasonName });
+        }
+        log(`Friendly league ${rbfaSeriesId} already exists.`, 'log');
+      } else {
+        log(`Creating missing friendly league ${rbfaSeriesId}.`, 'log');
+        wpLeague = await createLeagueEntry({
+          serieId: rbfaSeriesId,
+          name: match.series.name || `Oefenwedstrijden ${team.name}`,
+        }, selectedSeasonName);
+      }
+    } else {
+      const leagueDescription = wpLeague?.description?.trim();
+      if (!wpLeague || leagueDescription !== selectedSeasonName) {
+        log(`Skipping match ${match.id} for team ${team.id}: series ${rbfaSeriesId} is not an FRN series or a valid official league for season "${selectedSeasonName}".`, 'warn');
+        continue;
+      }
+      log(`Processing official match ${match.id} in series ${rbfaSeriesId}.`, 'log');
+    }
+
+    if (!wpLeague?.id) {
+      log(`Skipping match ${match.id} for team ${team.id}: league ${rbfaSeriesId} could not be prepared.`, 'warn');
+      continue;
+    }
+
+    const currentWpLeagueId = wpLeague.id;
+    match.series.serieId = currentWpLeagueId;
 
     let thuisMatch = false;
     // Generate a unique slug for the event, based on match data (e.g., date and teams)
@@ -324,14 +379,20 @@ export async function fetchAndProcessTeamCalendar(team, selectedSeasonName, sele
     const homeTeamSlug = generateSlug(homeTeamId);
 
     // Retrieve and update team details from 'doesEntityExist' for away team
-    const awayTeamRecord = await doesEntityExist('teams', awayTeamSlug);
+    let awayTeamRecord = await doesEntityExist('teams', awayTeamSlug);
+    if (!awayTeamRecord && friendlyMatch) {
+      awayTeamRecord = await ensureFriendlyTeamRecord(match.awayTeam, team, serieSlug);
+    }
     if (!awayTeamRecord) {
         log(`No record found for away team: ${match.awayTeam.name}. Skipping event creation.`, 'error');
         continue; // Skip event creation if away team is not found
     }
 
     // Retrieve and update team details from 'doesEntityExist' for home team
-    const homeTeamRecord = await doesEntityExist('teams', homeTeamSlug);
+    let homeTeamRecord = await doesEntityExist('teams', homeTeamSlug);
+    if (!homeTeamRecord && friendlyMatch) {
+      homeTeamRecord = await ensureFriendlyTeamRecord(match.homeTeam, team, serieSlug);
+    }
     if (!homeTeamRecord) {
         log(`No record found for home team: ${match.homeTeam.name}. Skipping event creation.`, 'error');
         continue; // Skip event creation if home team is not found
@@ -363,37 +424,28 @@ export async function fetchAndProcessTeamCalendar(team, selectedSeasonName, sele
    }
 
     // Convert match to event format
-    const eventData = convertMatchToEvent(match, eventSlug, thuisMatch, venue, serieId, selectedSeasonId);
+    const eventData = convertMatchToEvent(match, eventSlug, thuisMatch, venue, currentWpLeagueId, selectedSeasonId);
 
     // Step 4: Check if the event already exists
     const existingEvent = await doesEntityExist('events', eventSlug);
     if (existingEvent) {
       // If the event exists, update it
-      eventPromises.push(
-        updateEvent(existingEvent.id, eventData).then(updatedEvent => {
-          log(`Updated event: ${eventSlug}`, 'log');
-          eventsToAddToCalendar.push(updatedEvent);
-        }).catch(error => {
-          log(`Error updating event: ${error}`, 'error');
-        })
-      );
+      const updatedEvent = await updateEvent(existingEvent.id, eventData);
+      if (updatedEvent?.id) {
+        log(`Updated existing ${friendlyMatch ? 'friendly ' : ''}event ${match.id}.`, 'log');
+        eventIds.add(updatedEvent.id);
+        calendarLeagueIds.add(currentWpLeagueId);
+      }
     } else {
       // If the event doesn't exist, create it
-      eventPromises.push(
-        createEvent(eventData).then(event => {
-          log(`Created event: ${eventSlug}`, 'log');
-          eventsToAddToCalendar.push(event);
-        }).catch(error => {
-          log(`Error creating event: ${error}`, 'error');
-        })
-      );
+      const event = await createEvent(eventData);
+      if (event?.id) {
+        log(`Created ${friendlyMatch ? 'friendly ' : ''}event ${match.id}.`, 'log');
+        eventIds.add(event.id);
+        calendarLeagueIds.add(currentWpLeagueId);
+      }
     }
     }
-
-  await Promise.all(eventPromises);
-
-  // Step 6: Wait for all events to be created (if any)
-  await Promise.all(eventPromises);
 
   const teamSlug = generateSlug(team.id);
 
@@ -402,12 +454,8 @@ export async function fetchAndProcessTeamCalendar(team, selectedSeasonName, sele
   const calendarData = {
       title: `${team.name} Calendar`, // Using team name for the calendar
       status: "publish", // ✅ This ensures it's not a draft
-      leagues: [serieId],
-      events: Array.isArray(eventsToAddToCalendar) 
-      ? eventsToAddToCalendar
-          .filter(event => event && event.id !== undefined) // Ensure event is defined and has an id
-          .map(event => event.id)
-      : [],
+      leagues: [...calendarLeagueIds],
+      events: [...eventIds],
       slug:calendarSlug
   };
 
@@ -712,22 +760,23 @@ export async function runAllTeams(
         selectedSeasonName,
         selectedSeasonPart
       );
+      let officialSerieSlug = null;
       if (
         !seriesResult ||
         !seriesResult.matchedSeries ||
         seriesResult.matchedSeries.length === 0
       ) {
-        log(`No matching series for ${team.name}`, "warn");
-        return;
-      }
+        log(`No official series found for ${team.name}; team calendar will still be processed.`, "warn");
+      } else {
+        const serie = seriesResult.matchedSeries[0];
+        const serieSlug = generateSlug(serie.serieId);
+        officialSerieSlug = serieSlug;
 
-      const serie = seriesResult.matchedSeries[0];
-      const serieSlug = generateSlug(serie.serieId);
-
-      const teamsInSeries = await fetchTeamsInSeries(serie);
-      if (Array.isArray(teamsInSeries)) {
-        for (const seriesTeam of teamsInSeries) {
-          await createRecordIfNotExist(seriesTeam, team.id, serieSlug);
+        const teamsInSeries = await fetchTeamsInSeries(serie);
+        if (Array.isArray(teamsInSeries)) {
+          for (const seriesTeam of teamsInSeries) {
+            await createRecordIfNotExist(seriesTeam, team.id, serieSlug);
+          }
         }
       }
 
@@ -737,9 +786,11 @@ export async function runAllTeams(
         selectedSeasonId
       );
 
-      const wpLeague = await doesEntityExist("leagues", serieSlug);
-      if (wpLeague) {
-        await fetchTeamMembers(team, wpLeague.id);
+      if (officialSerieSlug) {
+        const wpLeague = await doesEntityExist("leagues", officialSerieSlug);
+        if (wpLeague) {
+          await fetchTeamMembers(team, wpLeague.id);
+        }
       }
 
       log(`✅ Finished team ${team.name}`, "log");
