@@ -33,6 +33,10 @@ export async function updatePlayer(playerId, updatedData) {
     }
 }
 
+export function isOriginalTeamId(teamId, originalTeamId) {
+  return String(teamId) === String(originalTeamId);
+}
+
 export async function createRecordIfNotExist(team, originalTeamId = '', serieSlug = '') {
   try {
     let serieId = null;
@@ -43,7 +47,7 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
       if (league) serieId = league.id;
     }
 
-    const isOriginalTeam = team.id === originalTeamId;
+    const isOriginalTeam = isOriginalTeamId(team.id, originalTeamId);
     const teamName = team.clubName || team.name;
     if (!teamName) {
       console.error(`Missing name for team: ${team.id}`);
@@ -56,6 +60,7 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
      : generateSlug(serieSlug ? team.clubId : team.id);
 
      if (isOriginalTeam) {
+      log(`Processing ${team.name} as original club team.`, 'log');
       // Make the icon slug from the **team name**: "<team-name>-icon"
       // Example: "U6" -> "u6-icon", "U10 A" -> "u10-a-icon"
       const iconSlug = `${toSlug(team.name)}-icon`;
@@ -63,6 +68,9 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
       const media = await findMediaByExactSlug(iconSlug);
       if (media?.id) {
        team.featured_media = media.id;
+       log(`Using icon ${iconSlug} with media ID ${media.id} for ${team.name}.`, 'log');
+      } else {
+       log(`No icon found for ${iconSlug}, preserving existing featured media.`, 'warn');
       }
     } 
     else {
@@ -85,7 +93,10 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
     let listId;
     if(isOriginalTeam)
     {
-      team.clubName = recordExists.title.rendered;
+      team.clubName =
+        recordExists?.title?.rendered ||
+        team.clubName ||
+        team.name;
       const listSlug = teamSlug + '-list'
       // Check if team record exists
       let listExists = await doesEntityExist('lists', listSlug);
@@ -96,20 +107,46 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
       }
       else {
         const listData = convertTeamToListFormat(team, listSlug, serieId, wpTeamId);
+        if (!serieId) delete listData.leagues;
+        delete listData.seasons;
+        delete listData.positions;
         listExists = await updateListRecord(listExists.id, listData);
         console.log(`List record UPDATED for team: ${team.name}`);
       }
-      listId = listExists.id;
+      listId = listExists?.id;
+      if (listId) {
+        log(`Using player list ${listId} for ${team.name}.`, 'log');
+      } else {
+        log('Player list could not be prepared; preserving existing summary.', 'warn');
+      }
     }
 
     // Prepare team data
     const teamData = convertTeamDataToApiFormat(team, serieId, teamSlug, listId);
-
-    if (isOriginalTeam) teamData.title = null;
+    if (!teamData.excerpt?.trim()) delete teamData.excerpt;
+    if (!teamData.featured_media) delete teamData.featured_media;
 
     if (recordExists) {
       // Preserve existing manual HTML/content on the team page
       delete teamData.content;
+
+      if (isOriginalTeam) delete teamData.title;
+      if (!serieId) {
+        log(`No league available yet for ${team.name}; preserving existing league assignments.`, 'log');
+      }
+      // Existing leagues were already merged by addLeagueToTeamIfNotPresent.
+      delete teamData.leagues;
+
+      // Do not clear SportsPress relations when this partial sync has no value for them.
+      for (const relation of ['seasons', 'venues', 'staff', 'tables', 'lists', 'events']) {
+        if (Array.isArray(teamData[relation]) && teamData[relation].filter(Boolean).length === 0) {
+          delete teamData[relation];
+        }
+      }
+
+      if (teamData.excerpt) {
+        log(`Regenerated team summary for ${team.name}.`, 'log');
+      }
 
       // Update existing team record
       await updateTeamRecord(recordExists.id, teamData);
@@ -753,7 +790,7 @@ export async function runAllTeams(
     const processTeam = async (team) => {
       log(`➡️ Processing team: ${team.name}`, "log");
 
-      await createRecordIfNotExist(team);
+      await createRecordIfNotExist(team, team.id);
 
       const seriesResult = await fetchAndProcessSeries(
         team,
