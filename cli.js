@@ -1,7 +1,5 @@
 import { runAllTeams } from './main.node.js';
-
-const selectedSeasonName = 'Seizoen 2024-2025';
-const selectedSeasonId = 62;
+import { resolveSeasonConfig } from './seasonConfig.node.js';
 
 // simple arg parsing: --teamId=1234 and --chain
 let teamIdFilter = null;
@@ -27,17 +25,13 @@ let selectedSeasonPart =
   (process.env.SELECTED_SEASON_PART || '').toLowerCase() ||
   'deel1';
 
-// Guardrails
-if (!['deel1', 'deel2'].includes(selectedSeasonPart)) {
-  console.warn(
-    `Invalid season part "${selectedSeasonPart}". Falling back to "deel1".`
-  );
-  selectedSeasonPart = 'deel1';
-}
+const seasonConfig = resolveSeasonConfig(process.env, selectedSeasonPart);
+const { selectedSeasonName, selectedSeasonId } = seasonConfig;
+selectedSeasonPart = seasonConfig.selectedSeasonPart;
 
-console.log(
-  `[CLI] selectedSeasonPart = ${selectedSeasonPart} (arg=${partArg ?? 'none'}, env=${process.env.SELECTED_SEASON_PART ?? 'none'})`
-);
+console.log(`[CLI] selectedSeasonName = ${selectedSeasonName}`);
+console.log(`[CLI] selectedSeasonPart = ${selectedSeasonPart}`);
+console.log(`[CLI] selectedSeasonId = ${selectedSeasonId}`);
 
 runAllTeams(
   selectedSeasonName,
