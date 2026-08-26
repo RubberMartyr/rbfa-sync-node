@@ -716,9 +716,8 @@ export async function doesUserExist(username) {
     return result.length > 0 ? result[0] : null;
   } catch (error) {
     log('❌ Fout bij controleren of gebruiker bestaat: ' + error.message, 'error');
-    return null;
+    throw error;
   }
 }
-
 
 
