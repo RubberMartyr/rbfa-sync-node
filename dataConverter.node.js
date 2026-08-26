@@ -599,6 +599,10 @@ export function convertPlayerDataToApiFormat(playerData, playerSlug, serieId) {
 
 // Function to convert staff data to the required format for the WordPress API
 export function convertStaffDataToApiFormat(staffData, staffSlug) {
+    const staffFunctions = Array.isArray(staffData.function)
+        ? staffData.function
+        : [];
+
     const targetData = {
         "date": new Date().toISOString(),  // Set the current date as the date (can be adjusted if needed)
         "date_gmt": new Date().toISOString(),  // Set the current date in GMT format
@@ -624,7 +628,9 @@ export function convertStaffDataToApiFormat(staffData, staffSlug) {
             "type-sp_staff",
             "status-publish",
             "hentry",
-            ...staffData.function.map(fn => `sp_role-${fn.replace(/\s+/g, '-').toLowerCase()}`)  // Map staff function to roles in class list
+            ...staffFunctions
+                .filter(fn => typeof fn === 'string')
+                .map(fn => `sp_role-${fn.replace(/\s+/g, '-').toLowerCase()}`)  // Map staff function to roles in class list
         ],
         "teams": [],  // Empty teams array (can be populated if staff belongs to teams)
         "current_teams": [],  // Empty current teams array
