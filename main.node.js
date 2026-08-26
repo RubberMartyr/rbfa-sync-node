@@ -18,6 +18,15 @@ export function isOfficialTeamDelegate(functions) {
     normalizedFunctions.includes('officiële team afgevaardigde');
 }
 
+// RBFA identifies a staff assignment as "<person ID>_<team ID>". Only that
+// exact numeric shape is normalized so unrelated identifiers remain intact.
+export function getStaffPersonId(staffId) {
+  const value = String(staffId ?? '').trim();
+  const match = /^(\d+)_(\d+)$/.exec(value);
+
+  return match ? match[1] : value;
+}
+
 export function mergeManagedStaffRoles(existingRoleIds, delegateRoleId, isDelegate, canManageDelegateRole) {
   const normalizedRoleIds = Array.isArray(existingRoleIds)
     ? existingRoleIds
@@ -33,8 +42,9 @@ export function mergeManagedStaffRoles(existingRoleIds, delegateRoleId, isDelega
     return Array.from(roles);
   }
 
+  // A team-members response describes only one team. It can prove that this
+  // person is a delegate, but it cannot prove that they are not one elsewhere.
   if (isDelegate) roles.add(normalizedDelegateRoleId);
-  else roles.delete(normalizedDelegateRoleId);
 
   return Array.from(roles);
 }
@@ -754,13 +764,28 @@ export async function fetchTeamMembers(team, serieId) {
 
       // Process staff **sequentieel** om 429 te vermijden
       for (const staff of teamMembersData.staff) {
-        const staffSlug = generateSlug(staff.id);
+        const originalStaffId = String(staff?.id ?? '').trim();
+        const staffPersonId = getStaffPersonId(staff?.id);
+        if (!originalStaffId || (!/^\d+$/.test(originalStaffId) && !/^\d+_\d+$/.test(originalStaffId))) {
+          log(`RBFA staff assignment has an ${originalStaffId ? `unexpected ID "${originalStaffId}"` : 'missing ID'}; using the safe fallback "${staffPersonId}".`, 'warn');
+        }
+        if (!staffPersonId) {
+          log(`Skipping RBFA staff assignment for ${staff?.firstName || ''} ${staff?.lastName || ''} because no canonical person ID is available.`, 'warn');
+          continue;
+        }
+        if (originalStaffId !== staffPersonId) {
+          log(`RBFA staff assignment ${originalStaffId} resolved to person ID ${staffPersonId}.`, 'log');
+        }
+        const staffSlug = generateSlug(staffPersonId);
 
         const wordpressUser = await ensureWordPressUserForPerson(staff, 'staff');
         if (!wordpressUser) continue;
 
         // Check if staff exists
         const existingStaff = await doesEntityExist('staff', staffSlug);
+        log(existingStaff
+          ? `Using existing canonical staff record ${staffSlug} for team ${team.name}.`
+          : `Creating canonical staff record ${staffSlug}.`, 'log');
         const staffData = convertStaffDataToApiFormat(staff, staffSlug, wordpressUser.id);
 
         if (!Array.isArray(staff.function)) {
@@ -789,7 +814,7 @@ export async function fetchTeamMembers(team, serieId) {
                 log('Preserved existing staff roles while adding “Afgevaardigde”.', 'log');
               }
             } else if (!isDelegate && hadDelegateRole) {
-              log('Removed stale “Afgevaardigde” role because RBFA no longer reports the function.', 'log');
+              log('Preserved existing delegate role from another team assignment.', 'log');
             }
           }
         }
@@ -821,23 +846,33 @@ export async function fetchTeamMembers(team, serieId) {
   }
 }
 
-async function addPlayerOrStaffToTeamIfNotPresent(payload, teamId, existingRecord = null) {
+export async function addPlayerOrStaffToTeamIfNotPresent(payload, teamId, existingRecord = null) {
   try {
     // Zorg dat arrays bestaan
     if (!Array.isArray(payload.teams)) payload.teams = [];
     if (!Array.isArray(payload.current_teams)) payload.current_teams = [];
 
     // Haal bestaande teams uit het bestaande WP-record (als we updaten)
-    const existingTeams = Array.isArray(existingRecord?.teams) ? existingRecord.teams : [];
-    const existingCurrent = Array.isArray(existingRecord?.current_teams) ? existingRecord.current_teams : [];
+    const normalizeTeamIds = (teamIds) => teamIds
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0);
+    const existingTeams = Array.isArray(existingRecord?.teams) ? normalizeTeamIds(existingRecord.teams) : [];
+    const existingCurrent = Array.isArray(existingRecord?.current_teams) ? normalizeTeamIds(existingRecord.current_teams) : [];
+    const payloadTeams = normalizeTeamIds(payload.teams);
+    const payloadCurrent = normalizeTeamIds(payload.current_teams);
+    const normalizedTeamId = Number(teamId);
+
+    if (!Number.isInteger(normalizedTeamId) || normalizedTeamId <= 0) {
+      throw new Error(`Invalid WordPress team ID: ${teamId}`);
+    }
 
     // Merge via Set om duplicaten te vermijden
-    const mergedTeams = new Set([...existingTeams, ...payload.teams]);
-    const mergedCurrent = new Set([...existingCurrent, ...payload.current_teams]);
+    const mergedTeams = new Set([...existingTeams, ...payloadTeams]);
+    const mergedCurrent = new Set([...existingCurrent, ...payloadCurrent]);
 
     // Voeg het nieuwe team toe
-    mergedTeams.add(teamId);
-    mergedCurrent.add(teamId);
+    mergedTeams.add(normalizedTeamId);
+    mergedCurrent.add(normalizedTeamId);
 
     payload.teams = Array.from(mergedTeams);
     payload.current_teams = Array.from(mergedCurrent);
