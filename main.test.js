@@ -1,8 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isFriendlySeriesId, isOriginalTeamId } from './main.node.js';
-import { convertTeamDataToApiFormat, convertTeamToListFormat } from './dataConverter.node.js';
+import {
+  isFriendlySeriesId,
+  isOfficialTeamDelegate,
+  isOriginalTeamId,
+  mergeManagedStaffRoles,
+} from './main.node.js';
+import {
+  convertStaffDataToApiFormat,
+  convertTeamDataToApiFormat,
+  convertTeamToListFormat,
+} from './dataConverter.node.js';
 import { toSlug } from './api.node.js';
 
 test('isFriendlySeriesId classifies only FRN_ series IDs as friendly', () => {
@@ -30,4 +39,29 @@ test('team and player-list payloads never contain a null league', () => {
   assert.deepEqual(teamPayload.leagues, []);
   assert.deepEqual(listPayload.leagues, []);
   assert.match(teamPayload.excerpt, /\[player_list id="42"/);
+});
+
+test('official team delegates are recognized defensively in English and Dutch', () => {
+  assert.equal(isOfficialTeamDelegate(['Official Team Delegate']), true);
+  assert.equal(isOfficialTeamDelegate(['Officiële Team Afgevaardigde']), true);
+  assert.equal(isOfficialTeamDelegate(['T1', 'Official Team Delegate', 'T2']), true);
+  assert.equal(isOfficialTeamDelegate(['  OFFICIAL TEAM DELEGATE  ']), true);
+  assert.equal(isOfficialTeamDelegate(['T1']), false);
+  assert.equal(isOfficialTeamDelegate(null), false);
+  assert.equal(isOfficialTeamDelegate(undefined), false);
+  assert.equal(isOfficialTeamDelegate('Official Team Delegate'), false);
+});
+
+test('staff conversion tolerates missing or invalid function data', () => {
+  assert.doesNotThrow(() => convertStaffDataToApiFormat({ id: '1', firstName: 'A', lastName: 'B' }, 'RBFA-1'));
+  assert.doesNotThrow(() => convertStaffDataToApiFormat({ id: '2', firstName: 'C', lastName: 'D', function: null }, 'RBFA-2'));
+});
+
+test('managed delegate roles preserve all other numeric SportsPress roles', () => {
+  assert.deepEqual(mergeManagedStaffRoles([66], 426, true, true), [66, 426]);
+  assert.deepEqual(mergeManagedStaffRoles([426, 426], 426, true, true), [426]);
+  assert.deepEqual(mergeManagedStaffRoles([66, 426], 426, false, true), [66]);
+  assert.deepEqual(mergeManagedStaffRoles([66, 426], 426, false, false), [66, 426]);
+  assert.deepEqual(mergeManagedStaffRoles([66, 77, 426], 426, false, true), [66, 77]);
+  assert.deepEqual(mergeManagedStaffRoles(['66', 66], 426, true, true), [66, 426]);
 });
