@@ -4,18 +4,42 @@ import { log } from './logger.js';
 import { convertClubGroundToApiFormat , convertMatchToEvent, convertTeamDataToApiFormat, convertStaffDataToApiFormat, convertPlayerDataToApiFormat, convertTeamToListFormat } from './dataConverter.node.js';
 import { protectCalendarRelations, shouldMigrateFriendlyLeague } from './syncHelpers.node.js';
 
-const DELEGATE_ROLE_SLUG = 'afgevaardigde';
-let delegateRolePromise;
+export const STAFF_FUNCTION_ROLE_MAP = Object.freeze({
+  't1': ['trainer'],
+  't2': ['trainer'],
+  'goalkeeper coach': ['trainer'],
+  'head of youth development': ['coordinator'],
+  'official team delegate': ['afgevaardigde'],
+  'officiële team afgevaardigde': ['afgevaardigde'],
+});
+const staffRolePromises = new Map();
+const warnedUnknownStaffFunctions = new Set();
 
-export function isOfficialTeamDelegate(functions) {
-  if (!Array.isArray(functions)) return false;
+export function normalizeStaffFunction(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
 
-  const normalizedFunctions = functions
-    .filter((value) => typeof value === 'string')
-    .map((value) => value.trim().toLowerCase());
+export function getMappedStaffRoleSlugs(functions, warnFn = (message) => log(message, 'warn')) {
+  if (!Array.isArray(functions)) return [];
+  const roleSlugs = new Set();
 
-  return normalizedFunctions.includes('official team delegate') ||
-    normalizedFunctions.includes('officiële team afgevaardigde');
+  for (const value of functions) {
+    const normalizedFunction = normalizeStaffFunction(value);
+    if (!normalizedFunction) continue;
+    const mappedRoles = STAFF_FUNCTION_ROLE_MAP[normalizedFunction];
+    if (!mappedRoles) {
+      if (!warnedUnknownStaffFunctions.has(normalizedFunction)) {
+        warnedUnknownStaffFunctions.add(normalizedFunction);
+        warnFn(`Unknown RBFA staff function “${value.trim()}”; preserving existing SportsPress roles.`);
+      }
+      continue;
+    }
+    mappedRoles.forEach((slug) => roleSlugs.add(slug));
+  }
+
+  return Array.from(roleSlugs);
 }
 
 // RBFA identifies a staff assignment as "<person ID>_<team ID>". Only that
@@ -27,42 +51,48 @@ export function getStaffPersonId(staffId) {
   return match ? match[1] : value;
 }
 
-export function mergeManagedStaffRoles(existingRoleIds, delegateRoleId, isDelegate, canManageDelegateRole) {
-  const normalizedRoleIds = Array.isArray(existingRoleIds)
-    ? existingRoleIds
+export function mergeStaffRoles(existingRoleIds, mappedRoleIds) {
+  const normalizedRoleIds = [...(Array.isArray(existingRoleIds) ? existingRoleIds : []),
+    ...(Array.isArray(mappedRoleIds) ? mappedRoleIds : [])]
         .map((roleId) => Number(roleId))
-        .filter((roleId) => Number.isInteger(roleId) && roleId > 0)
-    : [];
-  const roles = new Set(normalizedRoleIds);
-
-  if (!canManageDelegateRole) return Array.from(roles);
-
-  const normalizedDelegateRoleId = Number(delegateRoleId);
-  if (!Number.isInteger(normalizedDelegateRoleId) || normalizedDelegateRoleId <= 0) {
-    return Array.from(roles);
-  }
-
-  // A team-members response describes only one team. It can prove that this
-  // person is a delegate, but it cannot prove that they are not one elsewhere.
-  if (isDelegate) roles.add(normalizedDelegateRoleId);
-
-  return Array.from(roles);
+        .filter((roleId) => Number.isInteger(roleId) && roleId > 0);
+  return Array.from(new Set(normalizedRoleIds));
 }
 
-async function getDelegateRole() {
-  if (!delegateRolePromise) {
-    delegateRolePromise = doesEntityExist('roles', DELEGATE_ROLE_SLUG)
-      .then((role) => {
-        if (role === false) delegateRolePromise = undefined;
-        return role;
-      })
-      .catch((error) => {
-        delegateRolePromise = undefined;
-        throw error;
-      });
+async function getSportsPressRoleBySlug(slug) {
+  if (!staffRolePromises.has(slug)) {
+    staffRolePromises.set(slug, (async () => {
+      try {
+        const role = await doesEntityExist('roles', slug);
+        const roleId = Number(role?.id);
+        if (!Number.isInteger(roleId) || roleId <= 0) {
+          log(`SportsPress role “${slug}” was not found; preserving existing roles.`, 'warn');
+          return null;
+        }
+        log(`Found SportsPress role “${slug}” with ID ${roleId}.`, 'log');
+        return roleId;
+      } catch (error) {
+        log(`SportsPress role “${slug}” lookup failed; preserving existing roles. ${error.message || error}`, 'warn');
+        return null;
+      }
+    })());
   }
+  return staffRolePromises.get(slug);
+}
 
-  return delegateRolePromise;
+export async function resolveMappedStaffRoleIds(functions, lookupRoleId = getSportsPressRoleBySlug, warnFn) {
+  const roleIds = [];
+  for (const roleSlug of getMappedStaffRoleSlugs(functions, warnFn)) {
+    try {
+      const roleId = Number(await lookupRoleId(roleSlug));
+      if (Number.isInteger(roleId) && roleId > 0) roleIds.push(roleId);
+    } catch (error) {
+      (warnFn || ((message) => log(message, 'warn')))(
+        `SportsPress role “${roleSlug}” lookup failed; preserving existing roles. ${error.message || error}`
+      );
+    }
+  }
+  return mergeStaffRoles([], roleIds);
 }
 
 
@@ -788,35 +818,13 @@ export async function fetchTeamMembers(team, serieId) {
           : `Creating canonical staff record ${staffSlug}.`, 'log');
         const staffData = convertStaffDataToApiFormat(staff, staffSlug, wordpressUser.id);
 
+        const existingRoles = Array.isArray(existingStaff?.roles) ? existingStaff.roles : [];
         if (!Array.isArray(staff.function)) {
           log('RBFA staff functions were missing or invalid; preserving existing roles.', 'warn');
+          staffData.roles = mergeStaffRoles(existingRoles, []);
         } else {
-          const isDelegate = isOfficialTeamDelegate(staff.function);
-          let delegateRole;
-          try {
-            delegateRole = await getDelegateRole();
-          } catch (error) {
-            log(`SportsPress role “${DELEGATE_ROLE_SLUG}” lookup failed; preserving existing roles. ${error.message || error}`, 'warn');
-          }
-
-          const delegateRoleId = Number(delegateRole?.id);
-          if (!Number.isInteger(delegateRoleId) || delegateRoleId <= 0) {
-            log(`SportsPress role “${DELEGATE_ROLE_SLUG}” was not found; preserving existing roles.`, 'warn');
-          } else {
-            log(`Found SportsPress role “${DELEGATE_ROLE_SLUG}” with ID ${delegateRoleId}.`, 'log');
-            const existingRoles = Array.isArray(existingStaff?.roles) ? existingStaff.roles : [];
-            const hadDelegateRole = existingRoles.map(Number).includes(delegateRoleId);
-            staffData.roles = mergeManagedStaffRoles(existingRoles, delegateRoleId, isDelegate, true);
-
-            if (isDelegate && !hadDelegateRole) {
-              log(`Assigned role “Afgevaardigde” to ${staff.firstName} ${staff.lastName} for ${team.name}.`, 'log');
-              if (existingRoles.length > 0) {
-                log('Preserved existing staff roles while adding “Afgevaardigde”.', 'log');
-              }
-            } else if (!isDelegate && hadDelegateRole) {
-              log('Preserved existing delegate role from another team assignment.', 'log');
-            }
-          }
+          const mappedRoleIds = await resolveMappedStaffRoleIds(staff.function);
+          staffData.roles = mergeStaffRoles(existingRoles, mappedRoleIds);
         }
 
         if (existingStaff) {
@@ -908,6 +916,8 @@ export async function runAllTeams(
   options = {}
 ) {
   try {
+    staffRolePromises.clear();
+    warnedUnknownStaffFunctions.clear();
     log("=== runAllTeams START ===", "log");
     log(`selectedSeasonName = ${selectedSeasonName}`, "log");
     log(`selectedSeasonId   = ${selectedSeasonId}`, "log");

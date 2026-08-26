@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 
 import {
   isFriendlySeriesId,
-  isOfficialTeamDelegate,
   isOriginalTeamId,
-  mergeManagedStaffRoles,
+  normalizeStaffFunction,
+  getMappedStaffRoleSlugs,
+  mergeStaffRoles,
+  resolveMappedStaffRoleIds,
   ensureWordPressUserForPerson,
   getStaffPersonId,
   addPlayerOrStaffToTeamIfNotPresent,
@@ -46,15 +48,21 @@ test('team and player-list payloads never contain a null league', () => {
   assert.match(teamPayload.excerpt, /\[player_list id="42"/);
 });
 
-test('official team delegates are recognized defensively in English and Dutch', () => {
-  assert.equal(isOfficialTeamDelegate(['Official Team Delegate']), true);
-  assert.equal(isOfficialTeamDelegate(['Officiële Team Afgevaardigde']), true);
-  assert.equal(isOfficialTeamDelegate(['T1', 'Official Team Delegate', 'T2']), true);
-  assert.equal(isOfficialTeamDelegate(['  OFFICIAL TEAM DELEGATE  ']), true);
-  assert.equal(isOfficialTeamDelegate(['T1']), false);
-  assert.equal(isOfficialTeamDelegate(null), false);
-  assert.equal(isOfficialTeamDelegate(undefined), false);
-  assert.equal(isOfficialTeamDelegate('Official Team Delegate'), false);
+test('staff functions are normalized and mapped to configured role slugs', () => {
+  assert.equal(normalizeStaffFunction('T1'), 't1');
+  assert.equal(normalizeStaffFunction(' T2 '), 't2');
+  assert.equal(normalizeStaffFunction('Goalkeeper Coach'), 'goalkeeper coach');
+  assert.equal(normalizeStaffFunction('  '), null);
+  assert.equal(normalizeStaffFunction(null), null);
+
+  assert.deepEqual(getMappedStaffRoleSlugs(['T1']), ['trainer']);
+  assert.deepEqual(getMappedStaffRoleSlugs(['T2']), ['trainer']);
+  assert.deepEqual(getMappedStaffRoleSlugs(['Goalkeeper Coach']), ['trainer']);
+  assert.deepEqual(getMappedStaffRoleSlugs(['Head Of Youth Development']), ['coordinator']);
+  assert.deepEqual(getMappedStaffRoleSlugs(['Official Team Delegate']), ['afgevaardigde']);
+  assert.deepEqual(getMappedStaffRoleSlugs(['Officiële Team Afgevaardigde']), ['afgevaardigde']);
+  assert.deepEqual(getMappedStaffRoleSlugs(['T1', 'Official Team Delegate']), ['trainer', 'afgevaardigde']);
+  assert.deepEqual(getMappedStaffRoleSlugs(['T1', 'T2']), ['trainer']);
 });
 
 test('staff conversion tolerates missing or invalid function data', () => {
@@ -115,13 +123,11 @@ test('WordPress user resolution rejects missing names, failed lookups and invali
   assert.equal(createCalls, 0);
 });
 
-test('managed delegate roles preserve all other numeric SportsPress roles', () => {
-  assert.deepEqual(mergeManagedStaffRoles([66], 426, true, true), [66, 426]);
-  assert.deepEqual(mergeManagedStaffRoles([426, 426], 426, true, true), [426]);
-  assert.deepEqual(mergeManagedStaffRoles([66, 426], 426, false, true), [66, 426]);
-  assert.deepEqual(mergeManagedStaffRoles([66, 426], 426, false, false), [66, 426]);
-  assert.deepEqual(mergeManagedStaffRoles([66, 77, 426], 426, false, true), [66, 77, 426]);
-  assert.deepEqual(mergeManagedStaffRoles(['66', 66], 426, true, true), [66, 426]);
+test('mapped staff roles preserve and normalize all existing SportsPress roles', () => {
+  assert.deepEqual(mergeStaffRoles([66], [426]), [66, 426]);
+  assert.deepEqual(mergeStaffRoles([426, 426], [426]), [426]);
+  assert.deepEqual(mergeStaffRoles([66, 77], []), [66, 77]);
+  assert.deepEqual(mergeStaffRoles(['66', 66, 0, 'bad'], [426]), [66, 426]);
 });
 
 test('staff assignment IDs normalize only the strict RBFA numeric shape', () => {
@@ -174,15 +180,47 @@ test('staff team assignments merge numerically and idempotently', async () => {
   assert.deepEqual(payload.current_teams, [101, 202]);
 });
 
-test('delegate role survives either team processing order without duplicates', () => {
-  const delegateRoleId = 426;
-  const delegateThenOther = mergeManagedStaffRoles(
-    mergeManagedStaffRoles([], delegateRoleId, true, true), delegateRoleId, false, true
-  );
-  const otherThenDelegate = mergeManagedStaffRoles(
-    mergeManagedStaffRoles([], delegateRoleId, false, true), delegateRoleId, true, true
+test('staff roles from multiple teams are cumulative and order independent', async () => {
+  const roleIds = { trainer: 100, coordinator: 200, afgevaardigde: 426 };
+  const lookup = async (slug) => roleIds[slug];
+  const delegate = await resolveMappedStaffRoleIds(['Official Team Delegate'], lookup);
+  const coordinator = await resolveMappedStaffRoleIds(['Head Of Youth Development'], lookup);
+  const delegateThenCoordinator = mergeStaffRoles(mergeStaffRoles([], delegate), coordinator).sort();
+  const coordinatorThenDelegate = mergeStaffRoles(mergeStaffRoles([], coordinator), delegate).sort();
+
+  assert.deepEqual(delegateThenCoordinator, [200, 426]);
+  assert.deepEqual(coordinatorThenDelegate, [200, 426]);
+
+  const trainer = await resolveMappedStaffRoleIds(['T1', 'T2'], lookup);
+  assert.deepEqual(trainer, [100]);
+});
+
+test('a missing mapped role does not discard existing or other resolved roles', async () => {
+  const warnings = [];
+  const resolved = await resolveMappedStaffRoleIds(
+    ['T1', 'Official Team Delegate'],
+    async (slug) => {
+      if (slug === 'trainer') throw new Error('mock lookup failure');
+      return 426;
+    },
+    (message) => warnings.push(message)
   );
 
-  assert.deepEqual(delegateThenOther, [delegateRoleId]);
-  assert.deepEqual(otherThenDelegate, [delegateRoleId]);
+  assert.deepEqual(mergeStaffRoles([66], resolved), [66, 426]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /trainer.*lookup failed/);
+});
+
+test('unknown RBFA functions add no role and warn only once', async () => {
+  const warnings = [];
+  const lookupCalls = [];
+  const lookup = async (slug) => { lookupCalls.push(slug); return 1; };
+  const resolved = await resolveMappedStaffRoleIds(
+    ['Physician', 'Some Future Function', 'Physician'], lookup, (message) => warnings.push(message)
+  );
+
+  assert.deepEqual(resolved, []);
+  assert.deepEqual(mergeStaffRoles([66], resolved), [66]);
+  assert.deepEqual(lookupCalls, []);
+  assert.equal(warnings.length, 2);
 });
