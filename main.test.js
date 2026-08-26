@@ -7,7 +7,10 @@ import {
   isOriginalTeamId,
   mergeManagedStaffRoles,
   ensureWordPressUserForPerson,
+  getStaffPersonId,
+  addPlayerOrStaffToTeamIfNotPresent,
 } from './main.node.js';
+import { generateSlug } from './api.node.js';
 import {
   convertPlayerDataToApiFormat,
   convertStaffDataToApiFormat,
@@ -115,8 +118,71 @@ test('WordPress user resolution rejects missing names, failed lookups and invali
 test('managed delegate roles preserve all other numeric SportsPress roles', () => {
   assert.deepEqual(mergeManagedStaffRoles([66], 426, true, true), [66, 426]);
   assert.deepEqual(mergeManagedStaffRoles([426, 426], 426, true, true), [426]);
-  assert.deepEqual(mergeManagedStaffRoles([66, 426], 426, false, true), [66]);
+  assert.deepEqual(mergeManagedStaffRoles([66, 426], 426, false, true), [66, 426]);
   assert.deepEqual(mergeManagedStaffRoles([66, 426], 426, false, false), [66, 426]);
-  assert.deepEqual(mergeManagedStaffRoles([66, 77, 426], 426, false, true), [66, 77]);
+  assert.deepEqual(mergeManagedStaffRoles([66, 77, 426], 426, false, true), [66, 77, 426]);
   assert.deepEqual(mergeManagedStaffRoles(['66', 66], 426, true, true), [66, 426]);
+});
+
+test('staff assignment IDs normalize only the strict RBFA numeric shape', () => {
+  assert.equal(getStaffPersonId('381380_375477'), '381380');
+  assert.equal(getStaffPersonId('381380_375538'), '381380');
+  assert.equal(getStaffPersonId('598384_375476'), '598384');
+  assert.equal(getStaffPersonId('381380'), '381380');
+  assert.equal(getStaffPersonId(' member_123 '), 'member_123');
+  assert.equal(getStaffPersonId(null), '');
+});
+
+test('staff assignments for different teams produce one canonical slug', () => {
+  assert.equal(generateSlug(getStaffPersonId('381380_375477')), 'RBFA-381380');
+  assert.equal(generateSlug(getStaffPersonId('381380_375538')), 'RBFA-381380');
+});
+
+test('two staff assignments reuse one WordPress user and author', async () => {
+  const assignments = [
+    { id: '381380_375477', firstName: 'Bert', lastName: 'Leysen', function: [] },
+    { id: '381380_375538', firstName: 'Bert', lastName: 'Leysen', function: [] },
+  ];
+  let createCalls = 0;
+  const dependencies = {
+    doesUserExistFn: async () => ({ id: 73 }),
+    createUserFn: async () => { createCalls += 1; return { id: 99 }; },
+  };
+
+  const payloads = [];
+  for (const assignment of assignments) {
+    const user = await ensureWordPressUserForPerson(assignment, 'staff', dependencies);
+    const slug = generateSlug(getStaffPersonId(assignment.id));
+    payloads.push(convertStaffDataToApiFormat(assignment, slug, user.id));
+  }
+
+  assert.equal(createCalls, 0);
+  assert.deepEqual(payloads.map(({ author }) => author), [73, 73]);
+  assert.deepEqual(new Set(payloads.map(({ slug }) => slug)).size, 1);
+});
+
+test('staff team assignments merge numerically and idempotently', async () => {
+  const payload = { teams: [], current_teams: [] };
+  await addPlayerOrStaffToTeamIfNotPresent(payload, 101);
+  await addPlayerOrStaffToTeamIfNotPresent(payload, 202, {
+    teams: [...payload.teams, '101'],
+    current_teams: [...payload.current_teams, '101'],
+  });
+  await addPlayerOrStaffToTeamIfNotPresent(payload, 202, payload);
+
+  assert.deepEqual(payload.teams, [101, 202]);
+  assert.deepEqual(payload.current_teams, [101, 202]);
+});
+
+test('delegate role survives either team processing order without duplicates', () => {
+  const delegateRoleId = 426;
+  const delegateThenOther = mergeManagedStaffRoles(
+    mergeManagedStaffRoles([], delegateRoleId, true, true), delegateRoleId, false, true
+  );
+  const otherThenDelegate = mergeManagedStaffRoles(
+    mergeManagedStaffRoles([], delegateRoleId, false, true), delegateRoleId, true, true
+  );
+
+  assert.deepEqual(delegateThenOther, [delegateRoleId]);
+  assert.deepEqual(otherThenDelegate, [delegateRoleId]);
 });
