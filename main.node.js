@@ -650,6 +650,56 @@ export function generateUsername(firstName, lastName) {
   return clean(firstName) + clean(lastName).substring(0, 3);
 }
 
+export async function ensureWordPressUserForPerson(
+  person,
+  personType,
+  {
+    doesUserExistFn = doesUserExist,
+    createUserFn = createUser,
+  } = {}
+) {
+  const firstName = person?.firstName;
+  const lastName = person?.lastName;
+  const displayName = [firstName, lastName].filter(Boolean).join(' ') || '(unknown name)';
+  let username = '';
+
+  try {
+    if (!firstName || !lastName) {
+      throw new Error('firstName and lastName are required');
+    }
+
+    username = generateUsername(firstName, lastName);
+    const existingUser = await doesUserExistFn(username);
+    if (existingUser) {
+      if (!Number.isInteger(existingUser.id) || existingUser.id <= 0) {
+        throw new Error('existing user has no valid numeric ID');
+      }
+
+      log(`Using existing WordPress user "${username}" (ID ${existingUser.id}) for ${personType} ${displayName}`, 'log');
+      return existingUser;
+    }
+
+    const createdUser = await createUserFn({
+      username,
+      password: lastName.toLowerCase(),
+      email: `${username}@jeugdherk.com`,
+      roles: ['subscriber'],
+      first_name: firstName,
+      last_name: lastName,
+    });
+
+    if (!Number.isInteger(createdUser?.id) || createdUser.id <= 0) {
+      throw new Error('created user has no valid numeric ID');
+    }
+
+    log(`Created WordPress user "${username}" (ID ${createdUser.id}) for ${personType} ${displayName}`, 'log');
+    return createdUser;
+  } catch (error) {
+    log(`Could not resolve WordPress user for ${personType} ${displayName} (username "${username || '(not generated)'}"): ${error.message || error}`, 'error');
+    return null;
+  }
+}
+
 export async function fetchTeamMembers(team, serieId) {
   try {
 
@@ -678,10 +728,13 @@ export async function fetchTeamMembers(team, serieId) {
       // Process players
       const playerPromises = teamMembersData.players.map(async (player) => {
         const playerSlug = generateSlug(player.id);
+
+        const wordpressUser = await ensureWordPressUserForPerson(player, 'player');
+        if (!wordpressUser) return;
         
         // Check if player exists
         const existingPlayer = await doesEntityExist('players', playerSlug);
-        const playerData = convertPlayerDataToApiFormat(player, playerSlug, serieId);
+        const playerData = convertPlayerDataToApiFormat(player, playerSlug, serieId, wordpressUser.id);
         
         if (existingPlayer) {
          // Update existing player
@@ -697,32 +750,18 @@ export async function fetchTeamMembers(team, serieId) {
           log(`Created player: ${player.firstName}  ${player.lastName}`, 'log');
         }
 
-      const userName =  generateUsername(player.firstName, player.lastName)
-      const existingUser = await doesUserExist(userName);
-        if (existingUser) {
-          log(`Gebruiker "${userName}" bestaat al.`, 'log');
-        } else {
-          const newUser = {
-                              username: userName,
-                              password: player.lastName.toLowerCase(),
-                              email: userName + '@jeugdherk.com',
-                              roles: ['subscriber'],
-                              first_name: player.firstName,
-                              last_name: player.lastName
-                          };
-
-          await createUser(newUser);
-        }
-
       });
 
       // Process staff **sequentieel** om 429 te vermijden
       for (const staff of teamMembersData.staff) {
         const staffSlug = generateSlug(staff.id);
 
+        const wordpressUser = await ensureWordPressUserForPerson(staff, 'staff');
+        if (!wordpressUser) continue;
+
         // Check if staff exists
         const existingStaff = await doesEntityExist('staff', staffSlug);
-        const staffData = convertStaffDataToApiFormat(staff, staffSlug);
+        const staffData = convertStaffDataToApiFormat(staff, staffSlug, wordpressUser.id);
 
         if (!Array.isArray(staff.function)) {
           log('RBFA staff functions were missing or invalid; preserving existing roles.', 'warn');

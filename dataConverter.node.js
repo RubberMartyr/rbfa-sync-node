@@ -485,7 +485,7 @@ export function convertTeamSeriesToCalendar(teamSeriesData) {
 
 
 // Function to convert a player object to the required format for the WordPress API
-export function convertPlayerDataToApiFormat(playerData, playerSlug, serieId) {
+export function convertPlayerDataToApiFormat(playerData, playerSlug, serieId, wordpressUserId) {
     // Pak het aantal matchen uit de GraphQL-structuur (met fallbacks)
         const matches =
         parseInt(
@@ -509,7 +509,7 @@ export function convertPlayerDataToApiFormat(playerData, playerSlug, serieId) {
         "content": `${playerData.firstName} ${playerData.lastName}`,  // Assuming content is empty (can be filled if needed)
         "excerpt": `${playerData.firstName} ${playerData.lastName}`,
         "number": 10,
-        "author": 1,  // Default author ID (this should be set based on your system)
+        "author": wordpressUserId,
         "featured_media": 0,  // Default to 0 for no media (if image is available, update this)
         "parent": 0,  // Default to 0 for no parent
         "menu_order": 0,  // Default to 0 for no specific order
@@ -566,7 +566,7 @@ export function convertPlayerDataToApiFormat(playerData, playerSlug, serieId) {
             "author": [
                 {
                     "embeddable": true,
-                    "href": "https://goldbug.be/wp-json/wp/v2/users/1"
+                    "href": `https://goldbug.be/wp-json/wp/v2/users/${wordpressUserId}`
                 }
             ],
             "wp:attachment": [
@@ -598,7 +598,7 @@ export function convertPlayerDataToApiFormat(playerData, playerSlug, serieId) {
 }
 
 // Function to convert staff data to the required format for the WordPress API
-export function convertStaffDataToApiFormat(staffData, staffSlug) {
+export function convertStaffDataToApiFormat(staffData, staffSlug, wordpressUserId) {
     const staffFunctions = Array.isArray(staffData.function)
         ? staffData.function
         : [];
@@ -616,7 +616,7 @@ export function convertStaffDataToApiFormat(staffData, staffSlug) {
         "title": `${staffData.firstName} ${staffData.lastName}`,  // Staff's name as title
         "content": `${staffData.firstName} ${staffData.lastName}`,  // Staff's name as title,
         "excerpt": `${staffData.firstName} ${staffData.lastName}`,  // Staff's name as title,
-        "author": 1,  // Default author ID (this should be set based on your system)
+        "author": wordpressUserId,
         "featured_media": 0,  // Default to 0 for no media (update if staff photo exists)
         "template": "",  // No template by default
         "leagues": [],  // Empty array for leagues (can be populated based on requirements)
@@ -655,7 +655,7 @@ export function convertStaffDataToApiFormat(staffData, staffSlug) {
             "author": [
                 {
                     "embeddable": true,
-                    "href": "https://goldbug.be/wp-json/wp/v2/users/1"
+                    "href": `https://goldbug.be/wp-json/wp/v2/users/${wordpressUserId}`
                 }
             ],
             "wp:featuredmedia": [

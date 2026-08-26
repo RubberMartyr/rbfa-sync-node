@@ -6,8 +6,10 @@ import {
   isOfficialTeamDelegate,
   isOriginalTeamId,
   mergeManagedStaffRoles,
+  ensureWordPressUserForPerson,
 } from './main.node.js';
 import {
+  convertPlayerDataToApiFormat,
   convertStaffDataToApiFormat,
   convertTeamDataToApiFormat,
   convertTeamToListFormat,
@@ -55,6 +57,59 @@ test('official team delegates are recognized defensively in English and Dutch', 
 test('staff conversion tolerates missing or invalid function data', () => {
   assert.doesNotThrow(() => convertStaffDataToApiFormat({ id: '1', firstName: 'A', lastName: 'B' }, 'RBFA-1'));
   assert.doesNotThrow(() => convertStaffDataToApiFormat({ id: '2', firstName: 'C', lastName: 'D', function: null }, 'RBFA-2'));
+});
+
+test('person payloads use the resolved WordPress user as author', () => {
+  const player = { id: '1', firstName: 'A', lastName: 'B' };
+  const staff = { id: '2', firstName: 'C', lastName: 'D', function: [] };
+
+  assert.equal(convertPlayerDataToApiFormat(player, 'RBFA-1', 10, 123).author, 123);
+  assert.equal(convertStaffDataToApiFormat(staff, 'RBFA-2', 456).author, 456);
+});
+
+test('WordPress users are reused and newly created with existing account conventions', async () => {
+  const person = { firstName: 'José', lastName: 'Peeters' };
+  let createCalls = 0;
+  const existing = await ensureWordPressUserForPerson(person, 'player', {
+    doesUserExistFn: async () => ({ id: 12, slug: 'josepee' }),
+    createUserFn: async () => { createCalls += 1; },
+  });
+  assert.equal(existing.id, 12);
+  assert.equal(createCalls, 0);
+
+  let submittedUser;
+  const created = await ensureWordPressUserForPerson(person, 'staff', {
+    doesUserExistFn: async () => null,
+    createUserFn: async (user) => {
+      submittedUser = user;
+      return { id: 34, ...user };
+    },
+  });
+  assert.equal(created.id, 34);
+  assert.deepEqual(submittedUser, {
+    username: 'josepee',
+    password: 'peeters',
+    email: 'josepee@jeugdherk.com',
+    roles: ['subscriber'],
+    first_name: 'José',
+    last_name: 'Peeters',
+  });
+});
+
+test('WordPress user resolution rejects missing names, failed lookups and invalid IDs', async () => {
+  let createCalls = 0;
+  const createUserFn = async () => { createCalls += 1; return { id: 9 }; };
+
+  assert.equal(await ensureWordPressUserForPerson({ firstName: 'A' }, 'player', { createUserFn }), null);
+  assert.equal(await ensureWordPressUserForPerson({ firstName: 'A', lastName: 'B' }, 'staff', {
+    doesUserExistFn: async () => { throw new Error('lookup failed'); },
+    createUserFn,
+  }), null);
+  assert.equal(await ensureWordPressUserForPerson({ firstName: 'A', lastName: 'B' }, 'player', {
+    doesUserExistFn: async () => ({ id: '1' }),
+    createUserFn,
+  }), null);
+  assert.equal(createCalls, 0);
 });
 
 test('managed delegate roles preserve all other numeric SportsPress roles', () => {
