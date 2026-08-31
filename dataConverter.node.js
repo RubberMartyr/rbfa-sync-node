@@ -328,7 +328,21 @@ export function convertLeagueDataToApiFormat(leagueData, selectedSeasonName = ''
 
  
   
-export function convertMatchToEvent(matchData, eventSlug, thuisMatch, venue, serieId, seasonId) {
+function getMatchAgeGroup(ageGroup, teamName) {
+  const normalizedAgeGroup = String(ageGroup || '').replace(/\s+/g, '').toUpperCase();
+  const teamAgeGroup = String(teamName || '').match(/\bU\s*(\d+)\s*[- ]?\s*([A-Z])\b/i);
+
+  if (teamAgeGroup) {
+    const teamAge = `U${teamAgeGroup[1]}`;
+    if (!normalizedAgeGroup || normalizedAgeGroup === teamAge) {
+      return `${teamAge}${teamAgeGroup[2].toUpperCase()}`;
+    }
+  }
+
+  return normalizedAgeGroup || 'Onbekende leeftijdscategorie';
+}
+
+export function convertMatchToEvent(matchData, eventSlug, thuisMatch, venue, serieId, seasonId, teamName) {
   const eventId = parseInt(matchData.id, 10);
   const currentDate = new Date().toISOString();
 
@@ -346,8 +360,9 @@ export function convertMatchToEvent(matchData, eventSlug, thuisMatch, venue, ser
   };
 
   const matchStartTime = toLocalIsoNoZ(matchData.startTime);
+  const matchAgeGroup = getMatchAgeGroup(matchData.ageGroup, teamName);
   const plainMatchTitle =
-    `${matchData.ageGroup} — ${matchData.homeTeam.name} / ${matchData.awayTeam.name}` ||
+    `${matchAgeGroup} — ${matchData.homeTeam.name} / ${matchData.awayTeam.name}` ||
     "Unnamed Event";
 
   const content = thuisMatch

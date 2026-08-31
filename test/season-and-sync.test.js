@@ -81,3 +81,16 @@ test('existing event payload keeps slug and relations while replacing season', (
   assert.deepEqual(event.teams, [20, 21]);
   assert.deepEqual(event.seasons, [381]);
 });
+
+test('match title includes the team letter omitted by the RBFA age group', () => {
+  const match = {
+    id: '1000', startTime: '2026-08-20T12:00:00Z', ageGroup: 'U8',
+    homeTeam: { id: 20, name: 'Herk-De-Stad FC B 2-1' },
+    awayTeam: { id: 21, name: 'WS Schoonbeek-Bilzen A 1' },
+  };
+
+  const event = convertMatchToEvent(match, '1000', true, null, 50, 381, 'U8 B');
+
+  assert.equal(event.title, 'U8B — Herk-De-Stad FC B 2-1 / WS Schoonbeek-Bilzen A 1');
+  assert.match(event.excerpt, /^U8B —/);
+});

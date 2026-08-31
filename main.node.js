@@ -552,7 +552,7 @@ export async function fetchAndProcessTeamCalendar(team, selectedSeasonName, sele
    }
 
     // Convert match to event format
-    const eventData = convertMatchToEvent(match, eventSlug, thuisMatch, venue, currentWpLeagueId, selectedSeasonId);
+    const eventData = convertMatchToEvent(match, eventSlug, thuisMatch, venue, currentWpLeagueId, selectedSeasonId, team.name);
 
     // Step 4: Check if the event already exists
     const existingEvent = await doesEntityExist('events', eventSlug);
