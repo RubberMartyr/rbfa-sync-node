@@ -330,7 +330,10 @@ export function convertLeagueDataToApiFormat(leagueData, selectedSeasonName = ''
   
 function getMatchAgeGroup(ageGroup, teamName) {
   const normalizedAgeGroup = String(ageGroup || '').replace(/\s+/g, '').toUpperCase();
-  const teamAgeGroup = String(teamName || '').match(/\bU\s*(\d+)\s*[- ]?\s*([A-Z])\b/i);
+  // Team names contain the missing subdivision for every age category, for
+  // example "U7 A", "U12B" or "U17-C". Only accept a standalone letter so a
+  // descriptive name such as "U17 Provinciaal" cannot accidentally become U17P.
+  const teamAgeGroup = String(teamName || '').match(/\bU\s*(\d+)(?:\s*-?\s*([A-Z]))(?=\s|$)/i);
 
   if (teamAgeGroup) {
     const teamAge = `U${teamAgeGroup[1]}`;
