@@ -328,7 +328,24 @@ export function convertLeagueDataToApiFormat(leagueData, selectedSeasonName = ''
 
  
   
-export function convertMatchToEvent(matchData, eventSlug, thuisMatch, venue, serieId, seasonId) {
+function getMatchAgeGroup(ageGroup, teamName) {
+  const normalizedAgeGroup = String(ageGroup || '').replace(/\s+/g, '').toUpperCase();
+  // Team names contain the missing subdivision for every age category, for
+  // example "U7 A", "U12B" or "U17-C". Only accept a standalone letter so a
+  // descriptive name such as "U17 Provinciaal" cannot accidentally become U17P.
+  const teamAgeGroup = String(teamName || '').match(/\bU\s*(\d+)(?:\s*-?\s*([A-Z]))(?=\s|$)/i);
+
+  if (teamAgeGroup) {
+    const teamAge = `U${teamAgeGroup[1]}`;
+    if (!normalizedAgeGroup || normalizedAgeGroup === teamAge) {
+      return `${teamAge}${teamAgeGroup[2].toUpperCase()}`;
+    }
+  }
+
+  return normalizedAgeGroup || 'Onbekende leeftijdscategorie';
+}
+
+export function convertMatchToEvent(matchData, eventSlug, thuisMatch, venue, serieId, seasonId, teamName) {
   const eventId = parseInt(matchData.id, 10);
   const currentDate = new Date().toISOString();
 
@@ -346,8 +363,9 @@ export function convertMatchToEvent(matchData, eventSlug, thuisMatch, venue, ser
   };
 
   const matchStartTime = toLocalIsoNoZ(matchData.startTime);
+  const matchAgeGroup = getMatchAgeGroup(matchData.ageGroup, teamName);
   const plainMatchTitle =
-    `${matchData.ageGroup} — ${matchData.homeTeam.name} / ${matchData.awayTeam.name}` ||
+    `${matchAgeGroup} — ${matchData.homeTeam.name} / ${matchData.awayTeam.name}` ||
     "Unnamed Event";
 
   const content = thuisMatch

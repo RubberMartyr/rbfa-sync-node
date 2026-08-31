@@ -81,3 +81,34 @@ test('existing event payload keeps slug and relations while replacing season', (
   assert.deepEqual(event.teams, [20, 21]);
   assert.deepEqual(event.seasons, [381]);
 });
+
+test('match titles include the team letter for every age category', () => {
+  const cases = [
+    { ageGroup: 'U6', teamName: 'U6 A', expected: 'U6A' },
+    { ageGroup: 'U8', teamName: 'U8 B', expected: 'U8B' },
+    { ageGroup: 'U12', teamName: 'U12C', expected: 'U12C' },
+    { ageGroup: 'U17', teamName: 'U17-D', expected: 'U17D' },
+  ];
+
+  for (const { ageGroup, teamName, expected } of cases) {
+    const match = {
+      id: '1000', startTime: '2026-08-20T12:00:00Z', ageGroup,
+      homeTeam: { id: 20, name: 'Home' }, awayTeam: { id: 21, name: 'Away' },
+    };
+    const event = convertMatchToEvent(match, '1000', true, null, 50, 381, teamName);
+
+    assert.equal(event.title, `${expected} — Home / Away`);
+    assert.match(event.excerpt, new RegExp(`^${expected} —`));
+  }
+});
+
+test('descriptive team names are not mistaken for a team letter', () => {
+  const match = {
+    id: '1001', startTime: '2026-08-20T12:00:00Z', ageGroup: 'U17',
+    homeTeam: { id: 20, name: 'Home' }, awayTeam: { id: 21, name: 'Away' },
+  };
+
+  const event = convertMatchToEvent(match, '1001', false, null, 50, 381, 'U17 Provinciaal');
+
+  assert.equal(event.title, 'U17 — Home / Away');
+});
