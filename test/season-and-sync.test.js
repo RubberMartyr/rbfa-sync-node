@@ -2,7 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { resolveSeasonConfig } from '../seasonConfig.node.js';
-import { fetchAndProcessSeries, isFriendlySeriesId } from '../main.node.js';
+import {
+  deriveOfficialSeriesFromCalendar,
+  fetchAndProcessTeamCalendar,
+  fetchAndProcessSeries,
+  isFriendlySeriesId,
+  matchesSeasonPart,
+  parseSeasonPeriod,
+} from '../main.node.js';
 import { convertMatchToEvent } from '../dataConverter.node.js';
 import { protectCalendarRelations, shouldMigrateFriendlyLeague } from '../syncHelpers.node.js';
 
@@ -20,9 +27,204 @@ test('series processing handles empty results consistently', async () => {
     { id: 1, name: 'U8 B' },
     'Seizoen 2026-2027',
     'deel1',
-    { fetchTeamSeriesAndRankings: async () => ({ series: [] }) }
+    {
+      fetchTeamSeriesAndRankings: async () => ({ series: [] }),
+      fetchTeamCalendarRBFA: async () => [],
+    }
   );
   assert.deepEqual(result, { matchedSeries: [] });
+});
+
+const fallbackTeam = { id: 375469, name: 'U6 B' };
+const fallbackMatch = (overrides = {}) => ({
+  id: 'match-1',
+  startTime: '2026-09-01T10:00:00Z',
+  series: { id: 'CHP_135223', name: 'Gewestelijk U6 AW' },
+  homeTeam: { id: 375469 },
+  awayTeam: { id: 999 },
+  ...overrides,
+});
+
+function fallbackDependencies(overrides = {}) {
+  return {
+    fetchTeamSeriesAndRankings: async () => null,
+    fetchTeamCalendarRBFA: async () => [fallbackMatch()],
+    doesEntityExist: async () => null,
+    createLeagueEntry: async () => ({ id: 77, description: 'Seizoen 2026-2027' }),
+    updateLeagueEntry: async () => { throw new Error('unexpected update'); },
+    addLeagueToTeamIfNotPresent: async () => true,
+    ...overrides,
+  };
+}
+
+test('primary official series remains authoritative and does not fetch calendar', async () => {
+  let calendarCalls = 0;
+  const result = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', {
+    fetchTeamSeriesAndRankings: async () => ({
+      series: [{ serieId: 'CHP_135222', name: 'Gewestelijk U6 AV' }],
+    }),
+    fetchTeamCalendarRBFA: async () => { calendarCalls += 1; return [fallbackMatch()]; },
+    doesEntityExist: async () => ({ id: 76, description: 'Seizoen 2026-2027' }),
+    updateLeagueEntry: async (_id, data) => ({ id: 76, ...data }),
+  });
+  assert.equal(calendarCalls, 0);
+  assert.deepEqual(result.matchedSeries.map(({ serieId }) => serieId), ['CHP_135222']);
+});
+
+test('U6 B calendar fallback deduplicates matches, creates once and links selected team', async () => {
+  let creates = 0;
+  let links = 0;
+  let linkedSlug;
+  const matches = Array.from({ length: 14 }, (_, index) => fallbackMatch({ id: `match-${index}` }));
+  const result = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', fallbackDependencies({
+    fetchTeamCalendarRBFA: async () => matches,
+    createLeagueEntry: async (serie, description) => {
+      creates += 1;
+      assert.deepEqual({ serieId: serie.serieId, name: serie.name }, {
+        serieId: 'CHP_135223', name: 'Gewestelijk U6 AW',
+      });
+      assert.equal(description, 'Seizoen 2026-2027');
+      return { id: 77, description };
+    },
+    addLeagueToTeamIfNotPresent: async (slug, id) => {
+      links += 1; linkedSlug = slug; assert.equal(id, 77); return true;
+    },
+  }));
+  assert.equal(creates, 1);
+  assert.equal(links, 1);
+  assert.equal(linkedSlug, 'RBFA-375469');
+  assert.deepEqual(result.matchedSeries.map(({ serieId }) => serieId), ['CHP_135223']);
+});
+
+test('calendar fallback reuses same-season league without creating it', async () => {
+  let creates = 0;
+  const result = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', fallbackDependencies({
+    doesEntityExist: async () => ({ id: 77, description: 'Seizoen 2026-2027' }),
+    createLeagueEntry: async () => { creates += 1; },
+  }));
+  assert.equal(creates, 0);
+  assert.equal(result.matchedSeries.length, 1);
+});
+
+test('calendar fallback never overwrites a league belonging to another season', async () => {
+  let updates = 0;
+  const result = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', fallbackDependencies({
+    doesEntityExist: async () => ({ id: 77, description: 'Seizoen 2025-2026' }),
+    updateLeagueEntry: async () => { updates += 1; },
+  }));
+  assert.equal(updates, 0);
+  assert.deepEqual(result.matchedSeries, []);
+});
+
+test('calendar fallback validates series type, selected team, season and season part', () => {
+  assert.deepEqual(parseSeasonPeriod('Seizoen 2026-2027'), {
+    start: new Date('2026-07-01T00:00:00.000Z'),
+    end: new Date('2027-06-30T23:59:59.999Z'),
+  });
+  assert.equal(parseSeasonPeriod('current season'), null);
+  assert.equal(parseSeasonPeriod('Seizoen 2026-2028'), null);
+  assert.equal(matchesSeasonPart('Gewestelijk U6 AW', 'deel1'), true);
+  assert.equal(matchesSeasonPart('Gewestelijk U6 AW', 'deel2'), false);
+  assert.equal(matchesSeasonPart('2-Gewestelijk U6 AW', 'deel2'), true);
+
+  const valid = deriveOfficialSeriesFromCalendar([fallbackMatch()], fallbackTeam, 'Seizoen 2026-2027', 'deel1');
+  assert.deepEqual(valid.map(({ serieId }) => serieId), ['CHP_135223']);
+  for (const invalidMatch of [
+    fallbackMatch({ series: { id: 'FRN_1', name: 'Friendly' } }),
+    fallbackMatch({ series: { id: 'OTHER_1', name: 'Unknown' } }),
+    fallbackMatch({ homeTeam: { id: 1 }, awayTeam: { id: 2 } }),
+    fallbackMatch({ startTime: '2025-09-01T10:00:00Z' }),
+  ]) {
+    assert.deepEqual(deriveOfficialSeriesFromCalendar(
+      [invalidMatch], fallbackTeam, 'Seizoen 2026-2027', 'deel1', () => {}
+    ), []);
+  }
+  assert.deepEqual(deriveOfficialSeriesFromCalendar(
+    [fallbackMatch()], fallbackTeam, 'not parseable', 'deel1', () => {}
+  ), []);
+  assert.deepEqual(deriveOfficialSeriesFromCalendar(
+    [fallbackMatch()], fallbackTeam, 'Seizoen 2026-2027', 'deel2', () => {}
+  ), []);
+  assert.deepEqual(deriveOfficialSeriesFromCalendar(
+    [fallbackMatch({ series: { id: 'CHP_2', name: '2-Reeks' } })],
+    fallbackTeam, 'Seizoen 2026-2027', 'deel2', () => {}
+  ).map(({ serieId }) => serieId), ['CHP_2']);
+});
+
+test('calendar fallback safely excludes failed league creation and linking', async () => {
+  const nullResult = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', fallbackDependencies({
+    createLeagueEntry: async () => null,
+  }));
+  assert.deepEqual(nullResult.matchedSeries, []);
+
+  const thrownResult = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', fallbackDependencies({
+    createLeagueEntry: async () => { throw new Error('mock failure'); },
+  }));
+  assert.deepEqual(thrownResult.matchedSeries, []);
+
+  const linkResult = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', fallbackDependencies({
+    addLeagueToTeamIfNotPresent: async () => false,
+  }));
+  assert.deepEqual(linkResult.matchedSeries, []);
+});
+
+test('calendar processing uses a prepared fallback league and stays idempotent', async () => {
+  const entities = new Map([
+    ['leagues:RBFA-CHP_135223', { id: 77, description: 'Seizoen 2026-2027' }],
+    ['teams:RBFA-375469', { id: 101 }],
+    ['teams:RBFA-900', { id: 202 }],
+  ]);
+  let eventCreates = 0;
+  let calendarCreates = 0;
+  let lastEventData;
+  let lastCalendarData;
+  const calendarMatch = () => ({
+    id: 'u6b-event-1', startTime: '2026-09-01T10:00:00Z', ageGroup: 'U6',
+    series: { id: 'CHP_135223', name: 'Gewestelijk U6 AW' },
+    homeTeam: { id: 375469, clubId: 10, name: 'U6 B' },
+    awayTeam: { id: 999, clubId: 900, name: 'Opponent' },
+  });
+  const dependencies = {
+    fetchTeamCalendarRBFA: async () => [calendarMatch()],
+    doesEntityExist: async (type, slug) => entities.get(`${type}:${slug}`) || null,
+    getChildVenues: async () => [],
+    createEvent: async (data) => {
+      eventCreates += 1;
+      lastEventData = data;
+      const event = { id: 303, ...data };
+      entities.set(`events:${data.slug}`, event);
+      return event;
+    },
+    updateEvent: async (id, data) => {
+      lastEventData = data;
+      const event = { id, ...data };
+      entities.set(`events:${data.slug}`, event);
+      return event;
+    },
+    createCalendar: async (data) => {
+      calendarCreates += 1;
+      lastCalendarData = data;
+      const calendar = { id: 404, ...data };
+      entities.set(`calendars:${data.slug}`, calendar);
+      return calendar;
+    },
+    updateCalendar: async (id, data) => {
+      lastCalendarData = data;
+      const calendar = { id, ...data };
+      entities.set(`calendars:${data.slug}`, calendar);
+      return calendar;
+    },
+  };
+
+  await fetchAndProcessTeamCalendar(fallbackTeam, 'Seizoen 2026-2027', 381, dependencies);
+  await fetchAndProcessTeamCalendar(fallbackTeam, 'Seizoen 2026-2027', 381, dependencies);
+
+  assert.equal(eventCreates, 1);
+  assert.equal(calendarCreates, 1);
+  assert.deepEqual(lastEventData.leagues, [77]);
+  assert.deepEqual(lastEventData.seasons, [381]);
+  assert.deepEqual(lastCalendarData.events, [303]);
+  assert.deepEqual(lastCalendarData.leagues, [77]);
 });
 
 test('series processing examines every selected unique series and uses update result', async () => {
