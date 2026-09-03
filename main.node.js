@@ -129,6 +129,29 @@ export function isOriginalTeamId(teamId, originalTeamId) {
   return String(teamId) === String(originalTeamId);
 }
 
+export function normalizePositiveIntegerIds(values) {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0)));
+}
+
+export function prepareExistingListData(team, listSlug, serieId, wpTeamId, existingList) {
+  const listData = convertTeamToListFormat(team, listSlug, serieId, wpTeamId);
+  const normalizedSerieId = Number(serieId);
+  if (Number.isInteger(normalizedSerieId) && normalizedSerieId > 0) {
+    listData.leagues = Array.from(new Set([
+      ...normalizePositiveIntegerIds(existingList?.leagues),
+      normalizedSerieId,
+    ]));
+  } else {
+    delete listData.leagues;
+  }
+  delete listData.seasons;
+  delete listData.positions;
+  return listData;
+}
+
 export async function createRecordIfNotExist(team, originalTeamId = '', serieSlug = '') {
   try {
     let serieId = null;
@@ -198,10 +221,9 @@ export async function createRecordIfNotExist(team, originalTeamId = '', serieSlu
         console.log(`List Record exists for team: ${team.name}`);
       }
       else {
-        const listData = convertTeamToListFormat(team, listSlug, serieId, wpTeamId);
-        if (!serieId) delete listData.leagues;
-        delete listData.seasons;
-        delete listData.positions;
+        const listData = prepareExistingListData(
+          team, listSlug, serieId, wpTeamId, listExists
+        );
         listExists = await updateListRecord(listExists.id, listData);
         console.log(`List record UPDATED for team: ${team.name}`);
       }
@@ -301,6 +323,44 @@ export async function addLeagueToTeamIfNotPresent(teamSlug, newLeagueId) {
   }
 }
 
+export async function addLeagueToListIfNotPresent(listSlug, newLeagueId, dependencies = {}) {
+  const findEntity = dependencies.doesEntityExist || doesEntityExist;
+  const updateList = dependencies.updateListRecord || updateListRecord;
+  const normalizedNewLeagueId = Number(newLeagueId);
+
+  if (!Number.isInteger(normalizedNewLeagueId) || normalizedNewLeagueId <= 0) {
+    log(`Failed to link player list ${listSlug}: invalid league ID.`, 'warn');
+    return false;
+  }
+
+  try {
+    const existingList = await findEntity('lists', listSlug);
+    if (!existingList?.id) {
+      log(`Player list ${listSlug} could not be found; league relation was not updated.`, 'warn');
+      return false;
+    }
+
+    const existingLeagueIds = normalizePositiveIntegerIds(existingList.leagues);
+    if (existingLeagueIds.includes(normalizedNewLeagueId)) {
+      log(`Player list ${listSlug} is already linked to league ID ${normalizedNewLeagueId}.`, 'log');
+      return true;
+    }
+
+    const updated = await updateList(existingList.id, {
+      leagues: [...existingLeagueIds, normalizedNewLeagueId],
+    });
+    if (!updated) {
+      log(`Failed to link player list ${listSlug} to league ID ${normalizedNewLeagueId}.`, 'warn');
+      return false;
+    }
+    log(`Linked player list ${listSlug} to league ID ${normalizedNewLeagueId}.`, 'log');
+    return true;
+  } catch (error) {
+    log(`Failed to link player list ${listSlug} to league ID ${normalizedNewLeagueId}.`, 'warn');
+    return false;
+  }
+}
+
 export function parseSeasonPeriod(selectedSeasonName) {
   if (typeof selectedSeasonName !== 'string') return null;
   const match = /^Seizoen\s+(\d{4})-(\d{4})$/.exec(selectedSeasonName.trim());
@@ -369,6 +429,7 @@ export async function fetchAndProcessSeries(team, selectedSeasonName, selectedSe
   const updateLeague = dependencies.updateLeagueEntry || updateLeagueEntry;
   const fetchCalendar = dependencies.fetchTeamCalendarRBFA || fetchTeamCalendarRBFA;
   const linkTeam = dependencies.addLeagueToTeamIfNotPresent || addLeagueToTeamIfNotPresent;
+  const linkList = dependencies.addLeagueToListIfNotPresent || addLeagueToListIfNotPresent;
   try {
     const seriesData = await fetchSeries(team);
     const allSeries = Array.isArray(seriesData?.series) ? seriesData.series : [];
@@ -425,12 +486,14 @@ export async function fetchAndProcessSeries(team, selectedSeasonName, selectedSe
         } else if (wpLeague.description?.trim() !== selectedSeasonName) {
           log(`League description did not match selected season for ${serie.serieId}.`, 'warn');
         } else {
-          if (serie.calendarDerived) {
-            const linked = await linkTeam(generateSlug(team.id), wpLeague.id);
-            if (!linked) {
+          const teamSlug = generateSlug(team.id);
+          const linked = await linkTeam(teamSlug, wpLeague.id);
+          if (serie.calendarDerived && !linked) {
               log(`Calendar-derived league ${serieSlug} could not be linked to ${team.name}; skipping it.`, 'warn');
               continue;
-            }
+          }
+          await linkList(`${teamSlug}-list`, wpLeague.id);
+          if (serie.calendarDerived) {
             log(`Calendar fallback found official series ${serie.serieId} "${serie.name}" for ${team.name}.`, 'log');
             log(`Linked ${team.name} to calendar-derived league ${serieSlug}.`, 'log');
           }
