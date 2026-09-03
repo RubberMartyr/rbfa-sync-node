@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { resolveSeasonConfig } from '../seasonConfig.node.js';
 import {
+  addLeagueToListIfNotPresent,
   deriveOfficialSeriesFromCalendar,
   fetchAndProcessTeamCalendar,
   fetchAndProcessSeries,
@@ -53,12 +54,14 @@ function fallbackDependencies(overrides = {}) {
     createLeagueEntry: async () => ({ id: 77, description: 'Seizoen 2026-2027' }),
     updateLeagueEntry: async () => { throw new Error('unexpected update'); },
     addLeagueToTeamIfNotPresent: async () => true,
+    addLeagueToListIfNotPresent: async () => true,
     ...overrides,
   };
 }
 
 test('primary official series remains authoritative and does not fetch calendar', async () => {
   let calendarCalls = 0;
+  const listLinks = [];
   const result = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', {
     fetchTeamSeriesAndRankings: async () => ({
       series: [{ serieId: 'CHP_135222', name: 'Gewestelijk U6 AV' }],
@@ -66,15 +69,19 @@ test('primary official series remains authoritative and does not fetch calendar'
     fetchTeamCalendarRBFA: async () => { calendarCalls += 1; return [fallbackMatch()]; },
     doesEntityExist: async () => ({ id: 76, description: 'Seizoen 2026-2027' }),
     updateLeagueEntry: async (_id, data) => ({ id: 76, ...data }),
+    addLeagueToTeamIfNotPresent: async () => true,
+    addLeagueToListIfNotPresent: async (...args) => { listLinks.push(args); return true; },
   });
   assert.equal(calendarCalls, 0);
   assert.deepEqual(result.matchedSeries.map(({ serieId }) => serieId), ['CHP_135222']);
+  assert.deepEqual(listLinks, [['RBFA-375469-list', 76]]);
 });
 
 test('U6 B calendar fallback deduplicates matches, creates once and links selected team', async () => {
   let creates = 0;
   let links = 0;
   let linkedSlug;
+  const listLinks = [];
   const matches = Array.from({ length: 14 }, (_, index) => fallbackMatch({ id: `match-${index}` }));
   const result = await fetchAndProcessSeries(fallbackTeam, 'Seizoen 2026-2027', 'deel1', fallbackDependencies({
     fetchTeamCalendarRBFA: async () => matches,
@@ -89,11 +96,80 @@ test('U6 B calendar fallback deduplicates matches, creates once and links select
     addLeagueToTeamIfNotPresent: async (slug, id) => {
       links += 1; linkedSlug = slug; assert.equal(id, 77); return true;
     },
+    addLeagueToListIfNotPresent: async (...args) => { listLinks.push(args); return true; },
   }));
   assert.equal(creates, 1);
   assert.equal(links, 1);
   assert.equal(linkedSlug, 'RBFA-375469');
+  assert.deepEqual(listLinks, [['RBFA-375469-list', 77]]);
   assert.deepEqual(result.matchedSeries.map(({ serieId }) => serieId), ['CHP_135223']);
+});
+
+test('selected team list is linked without relying on teams-in-series and list failure is non-fatal', async () => {
+  let attempted = 0;
+  const result = await fetchAndProcessSeries(
+    fallbackTeam,
+    'Seizoen 2026-2027',
+    'deel1',
+    fallbackDependencies({
+      addLeagueToListIfNotPresent: async (slug, id) => {
+        attempted += 1;
+        assert.equal(slug, 'RBFA-375469-list');
+        assert.equal(id, 77);
+        return false;
+      },
+    })
+  );
+  assert.equal(attempted, 1);
+  assert.deepEqual(result.matchedSeries.map(({ serieId }) => serieId), ['CHP_135223']);
+});
+
+test('player-list league linking normalizes, merges and remains idempotent', async () => {
+  const cases = [
+    { leagues: [], expected: [77] },
+    { leagues: [42], expected: [42, 77] },
+    { leagues: [null, '', '77', 0, -1, 'invalid', '77'], expected: null },
+  ];
+  for (const { leagues, expected } of cases) {
+    const updates = [];
+    const result = await addLeagueToListIfNotPresent('RBFA-375469-list', 77, {
+      doesEntityExist: async (type, slug) => {
+        assert.equal(type, 'lists');
+        assert.equal(slug, 'RBFA-375469-list');
+        return { id: 91, leagues };
+      },
+      updateListRecord: async (...args) => { updates.push(args); return { id: 91 }; },
+    });
+    assert.equal(result, true);
+    assert.deepEqual(updates, expected ? [[91, { leagues: expected }]] : []);
+  }
+});
+
+test('player-list league linking safely rejects invalid IDs and missing or failed lists', async () => {
+  for (const invalidId of [null, undefined, 0, -1, NaN, 'CHP_135223']) {
+    let calls = 0;
+    assert.equal(await addLeagueToListIfNotPresent('list', invalidId, {
+      doesEntityExist: async () => { calls += 1; },
+    }), false);
+    assert.equal(calls, 0);
+  }
+
+  let updateCalls = 0;
+  assert.equal(await addLeagueToListIfNotPresent('missing-list', 77, {
+    doesEntityExist: async () => null,
+    updateListRecord: async () => { updateCalls += 1; },
+  }), false);
+  assert.equal(updateCalls, 0);
+
+  for (const updateListRecord of [
+    async () => null,
+    async () => { throw new Error('mock failure'); },
+  ]) {
+    assert.equal(await addLeagueToListIfNotPresent('existing-list', 77, {
+      doesEntityExist: async () => ({ id: 91, leagues: [] }),
+      updateListRecord,
+    }), false);
+  }
 });
 
 test('calendar fallback reuses same-season league without creating it', async () => {
@@ -247,6 +323,8 @@ test('series processing examines every selected unique series and uses update re
         if (id === 'RBFA-CHP_BAD') throw new Error('temporary failure');
         return { id, description: 'Seizoen 2026-2027' };
       },
+      addLeagueToTeamIfNotPresent: async () => true,
+      addLeagueToListIfNotPresent: async () => true,
     }
   );
   assert.deepEqual(examined, ['RBFA-CHP_BAD', 'RBFA-CHP_OK']);

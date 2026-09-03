@@ -11,6 +11,7 @@ import {
   ensureWordPressUserForPerson,
   getStaffPersonId,
   addPlayerOrStaffToTeamIfNotPresent,
+  prepareExistingListData,
 } from './main.node.js';
 import { generateSlug } from './api.node.js';
 import {
@@ -46,6 +47,19 @@ test('team and player-list payloads never contain a null league', () => {
   assert.deepEqual(teamPayload.leagues, []);
   assert.deepEqual(listPayload.leagues, []);
   assert.match(teamPayload.excerpt, /\[player_list id="42"/);
+});
+
+test('existing player-list updates preserve and merge leagues safely', () => {
+  const team = { id: '375469', name: 'U6 B', clubName: 'U6 B', players: {} };
+  const merged = prepareExistingListData(
+    team, 'RBFA-375469-list', 77, 12, { leagues: [42, '77', null, -1] }
+  );
+  assert.deepEqual(merged.leagues, [42, 77]);
+
+  const withoutLeague = prepareExistingListData(
+    team, 'RBFA-375469-list', null, 12, { leagues: [42] }
+  );
+  assert.equal(Object.hasOwn(withoutLeague, 'leagues'), false);
 });
 
 test('staff functions are normalized and mapped to configured role slugs', () => {
