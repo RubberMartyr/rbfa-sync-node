@@ -5,7 +5,7 @@ const { app } = require('@azure/functions');
 // const fetch = require("node-fetch");
 
 app.timer('rfbaTrigger', {
-    schedule: '0 0 6 * * 1', // Every Monday 06:00 UTC
+    schedule: '0 0 6 * * 1,3,4', // Every Monday, Wednesday and Thursday at 06:00 UTC
     handler: async (myTimer, context) => {
         console.log("🚀 Function deployed at", new Date().toISOString());
         context.log('RBFA Timer executed:', new Date().toISOString());
